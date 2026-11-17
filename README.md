@@ -6,14 +6,16 @@ A modern desktop application for managing SSH, Telnet, Serial, BMC, and VNC remo
 
 Built for network engineers, data-center technicians, system administrators, and IT professionals who manage hundreds or thousands of network devices.
 
-![Version](https://img.shields.io/badge/version-1.1.3-blue)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
+![Platform](https://img.shields.io/badge/release-Windows%20x64-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## What's new in v1.1.3
+## What's new in v2.0.0
 
-- SCP and SFTP file drags now use a WebView2-compatible standard drag marker, so files can be dropped into the current local directory or a specific local folder.
-- The actual local or remote path remains inside SessionDock while the harmless standard marker enables Windows to recognize the drag operation.
+- Persistent Arista EOS interface monitoring and a Network Health workspace now provide retained samples, incidents, baselines, comparisons, and maintenance windows.
+- Integrated noVNC sessions run through a tokenized loopback bridge, with RealVNC Viewer retained as an external fallback.
+- Native monitor alerts apply persistent occurrence deduplication, cooldowns, and maintenance suppression.
+- This release is available for Windows x64. macOS ARM64 remains deferred pending signing, notarization, and device validation.
 
 > **v1.0.1 credential repair:** passwords created with v1.0.1 were not persisted and cannot be recovered. After updating, edit each affected credential profile and save its password once.
 
@@ -38,7 +40,7 @@ Built for network engineers, data-center technicians, system administrators, and
 - **Hostname and IP support** - Resolves DNS names, tries all resolved addresses, and reports connection errors by stage.
 - **Quick Connect** - Open SSH, SCP, Telnet, Serial, BMC, or VNC without creating a saved session first. SSH and SCP can use a saved password credential or manually entered credentials.
 - **BMC / KVM over IP** - Open iDRAC, iLO, XClarity, Supermicro IPMI, and other browser-based management consoles in restricted native child WebViews or the default browser.
-- **VNC remote desktop** - Save or quickly open a VM desktop as a standalone VNC connection through RealVNC Viewer, using port 5900 by default.
+- **VNC remote desktop** - Open saved or quick VNC sessions in an integrated noVNC workspace through a tokenized loopback bridge, with RealVNC Viewer available as an external fallback.
 - **BMC diagnostics** - Test HTTP(S) reachability, latency, authentication responses, and optional Redfish discovery before connecting.
 - **Telnet support** - Connect to legacy network equipment with a clear transport security warning.
 - **Serial support** - Detect connected serial ports, merge the Windows serial registry as a discovery fallback, sort COM ports naturally, and configure baud rate, data bits, stop bits, parity, and flow control.
@@ -52,6 +54,9 @@ Built for network engineers, data-center technicians, system administrators, and
 - **Device Info and Quick Commands** - Match configured session metadata to conservative Generic SSH, Linux, or Arista EOS providers and expose exact read-only commands for insertion without automatic probing or execution.
 - **Structured device diagnostics** - Run provider-specific allowlisted checks in isolated SSH channels with status, exit code, truncation state, and raw stdout/stderr shown beside the terminal.
 - **Diagnostics workspace** - Explicitly choose a connected SSH target, monitor allowlisted checks across panes, select or copy raw output, cancel or rerun work, and retain bounded local history until it is explicitly cleared.
+- **Arista interface monitoring** - Run the fixed read-only EOS `show interfaces | json` check on a schedule for explicitly configured, trusted SSH sessions and retain bounded samples and incidents in SQLite.
+- **Network Health workspace** - Review monitor rollups, sample history, incident acknowledgement, copied baselines, baseline comparisons, and maintenance windows from one backend-owned data model.
+- **Native monitor alerts** - Notify on new unresolved monitor occurrences with persistent deduplication, a one-hour cooldown, and maintenance-window suppression.
 - **MultiExec** - Review one exact command against explicitly selected connected SSH panes, confirm modifying or high-risk batches, and inspect status plus raw output independently for every target.
 - **Semantic output colors** - Optionally highlights IP/CIDR addresses, MAC addresses, interfaces, VLANs, timestamps, status words, and ping results without changing the remote byte stream or overriding native ANSI colors.
 
@@ -114,6 +119,15 @@ All tunnel listeners are restricted to `127.0.0.1`.
 
 Diagnostics use backend allowlisted commands; this workspace does not accept arbitrary commands.
 
+### Network Health
+
+1. Open **Network Health** and select an eligible saved Arista EOS SSH session.
+2. Create an interface monitor and choose its polling interval. Monitoring always uses the provider-owned read-only command; arbitrary command text is not stored or executed.
+3. Review health rollups, samples, and incidents. Acknowledge incidents, copy a successful sample as a baseline, or compare later samples with that baseline.
+4. Add a maintenance window to suppress native notifications globally or for one session during planned work.
+
+The monitor worker starts with SessionDock and uses an exclusive lock so only one worker operates on the local database. It can continue after the main window exits, and the updater requests a graceful worker shutdown before installation. The worker is not currently registered to start at OS login. Update/uninstall behavior, packaged native notification delivery, and macOS behavior still require platform validation; do not rely on monitoring across a reboot until those gates are complete.
+
 ## Security
 
 - Passwords stored exclusively in OS credential vaults (never in SQLite or config files)
@@ -138,6 +152,9 @@ Diagnostics use backend allowlisted commands; this workspace does not accept arb
 - BMC remote pages receive no SessionDock capability or privileged IPC access; popup creation is denied and navigation is limited to HTTP(S)
 - Token-, ticket-, and session-bearing console URLs are available ephemerally but omitted from persistence and export
 - Embedded BMC certificate validation remains enabled; SessionDock never applies a global TLS bypass
+- VNC WebSockets bind only to `127.0.0.1`, require an unguessable path token and an approved SessionDock WebView origin, and accept binary frames only
+- The main WebView applies a restrictive Content Security Policy that permits Tauri IPC/assets and explicitly scoped loopback development and VNC connections
+- Monitor definitions contain provider and monitor identifiers rather than executable commands; collected data is bounded provider JSON and derived interface state, never credential material
 
 ### BMC limitations
 
@@ -147,13 +164,13 @@ Diagnostics use backend allowlisted commands; this workspace does not accept arb
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| Framework | Tauri 2 |
-| Frontend | React 18 + TypeScript |
-| Build | Vite 6 |
-| Styling | Tailwind CSS 4 |
-| Terminal | xterm.js 5 |
+| Component   | Technology                                                    |
+| ----------- | ------------------------------------------------------------- |
+| Framework   | Tauri 2                                                       |
+| Frontend    | React 18 + TypeScript                                         |
+| Build       | Vite 6                                                        |
+| Styling     | Tailwind CSS 4                                                |
+| Terminal    | xterm.js 5                                                    |
 | SSH Backend | ssh2 crate (libssh2) - native in-process, no external ssh.exe |
 
 | Database | SQLite with FTS5 (rusqlite) |
@@ -168,7 +185,8 @@ Diagnostics use backend allowlisted commands; this workspace does not accept arb
 
 ### Windows
 
-Download `SessionDock_1.1.3_x64-setup.exe` from the [v1.1.3 GitHub release](https://github.com/Nave1/SessionDock/releases/tag/v1.1.3) and run it. The NSIS installer will:
+Download `SessionDock_2.0.0_x64-setup.exe` from the [v2.0.0 GitHub release](https://github.com/nshitritIntel/SessionDock/releases/tag/v2.0.0) and run it. The NSIS installer will:
+
 - Install to Program Files
 - Create a Start Menu shortcut
 - Support clean uninstall via Add/Remove Programs
@@ -208,7 +226,7 @@ npm run dev
 
 # Or manually:
 npx tauri build
-# Output: src-tauri\target\release\bundle\nsis\SessionDock_1.0.0_x64-setup.exe
+# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.0_x64-setup.exe
 ```
 
 > **Intel network users:** The build script automatically sets the proxy (`proxy-iil.intel.com:912`). If you're on a different network, remove the proxy lines from `build.ps1`.
@@ -230,11 +248,11 @@ Dependency audits also run in CI when either lockfile changes and on a weekly sc
 
 ## Build Outputs
 
-| Platform | Output | Location |
-|----------|--------|----------|
-| Windows | NSIS Installer (.exe) | `release/` (copied by build.ps1) |
-| Windows | Raw binary | `src-tauri/target/release/sessiondock.exe` |
-| macOS | DMG Installer (.dmg) | Built via GitHub Actions on macOS runner |
+| Platform    | Output                | Location                                                            |
+| ----------- | --------------------- | ------------------------------------------------------------------- |
+| Windows     | NSIS Installer (.exe) | `release/` (copied by build.ps1)                                    |
+| Windows     | Raw binary            | `src-tauri/target/release/sessiondock.exe`                          |
+| macOS ARM64 | Not published         | Deferred pending Apple signing, notarization, and device validation |
 
 ## Project Structure
 
@@ -292,7 +310,7 @@ SessionDock/
 |   `-- serve-updates.ps1
 |-- .github/                      # CI/CD workflows
 |   |-- workflows/ci.yml          # PR checks (lint, test, build)
-|   `-- workflows/release.yml     # Signed Windows release and updater artifacts
+|   `-- workflows/release.yml     # Draft-first Windows x64 release pipeline
 |-- build.ps1                     # One-command build script
 |-- SECURITY.md                   # Security model documentation
 |-- CONTRIBUTING.md               # Contribution guidelines
@@ -309,6 +327,7 @@ SessionDock includes a built-in update system:
 3. Click "Update Now" to download and install in-place (no manual uninstall needed)
 
 **To publish an update:**
+
 ```powershell
 # One-time repository setup (run only from a trusted machine):
 Get-Content src-tauri\.tauri-private-key -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY
@@ -320,19 +339,21 @@ git tag v0.8.0
 git push origin v0.8.0
 ```
 
-The release workflow builds signed updater packages and publishes `latest.json` automatically. Installed copies check shortly after launch, whenever the app becomes active, and every six hours. The updater downloads, verifies, installs, and restarts SessionDock in place.
+The release workflow creates a draft, requires the Windows x64 quality and build gates to pass, uploads signed updater artifacts, and only then publishes the release. Installed copies check shortly after launch, whenever the app becomes active, and every six hours. The updater downloads, verifies, installs, and restarts SessionDock in place.
+
+Do not publish a macOS artifact until the ARM64 runner, signing, notarization, installation, notification delivery, VNC interoperability, and worker lifecycle have been validated on a physical or representative Apple Silicon system.
 
 Keep `src-tauri/.tauri-private-key` and `src-tauri/.tauri-key-password` private and backed up securely. Losing either prevents existing installations from trusting future updates. Never commit them to Git.
 
 ## Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl+K` | Open command palette |
-| `Ctrl+N` | New session |
-| `Ctrl+W` | Close current tab |
-| `Ctrl+Tab` | Next tab |
-| `Ctrl+Shift+Tab` | Previous tab |
+| Shortcut         | Action               |
+| ---------------- | -------------------- |
+| `Ctrl+K`         | Open command palette |
+| `Ctrl+N`         | New session          |
+| `Ctrl+W`         | Close current tab    |
+| `Ctrl+Tab`       | Next tab             |
+| `Ctrl+Shift+Tab` | Previous tab         |
 
 ## License
 

@@ -151,7 +151,7 @@ pub async fn spawn_terminal(
     Ok(())
 }
 
-fn resolve_jump_hosts(
+pub(crate) fn resolve_jump_hosts(
     db: &Database,
     jump_host_ids: &[String],
 ) -> Result<Vec<JumpHostConfig>, AppError> {
@@ -220,7 +220,7 @@ fn resolve_jump_hosts(
     Ok(jump_hosts)
 }
 
-fn validate_ssh_endpoint(host: &str, port: u16) -> Result<String, AppError> {
+pub(crate) fn validate_ssh_endpoint(host: &str, port: u16) -> Result<String, AppError> {
     let host = host.trim();
     if host.is_empty()
         || host.len() > 253
@@ -235,7 +235,7 @@ fn validate_ssh_endpoint(host: &str, port: u16) -> Result<String, AppError> {
     Ok(host.to_string())
 }
 
-fn resolve_ssh_authentication(
+pub(crate) fn resolve_ssh_authentication(
     db: &Database,
     method: &str,
     credential_profile_id: Option<&str>,

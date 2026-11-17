@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { nativeInvoke } from "../../api/native";
-import { findConnectedSshPane, listTerminalPaneIds, useAppStore } from "../../stores/appStore";
+import { listTerminalPaneIds, useAppStore } from "../../stores/appStore";
 import {
   type TransferRecord,
   type TransferStatus,
@@ -21,21 +21,32 @@ import {
 } from "../../stores/transferStore";
 import { useToastStore } from "../../stores/toastStore";
 import { formatTransferSize } from "../../utils/sftp";
+import { ConnectionSelectorDialog, type ConnectedSshTarget } from "../ConnectionSelectorDialog";
+import type { Session } from "../../types";
 
 type TransferFilter = "all" | "active" | "completed" | "failed";
 
 const ACTIVE_STATUSES = new Set<TransferStatus>(["running", "paused"]);
 
+function remotePathFor(transfer: TransferRecord): string | undefined {
+  const args = transfer.request?.args;
+  if (!args) return undefined;
+  if ("remotePath" in args) return args.remotePath;
+  if (args.items.length === 1) return args.items[0].remotePath;
+  return `${args.items[0].remotePath} +${args.items.length - 1}`;
+}
+
 export function TransfersView({ onQuickConnect = () => undefined }: { onQuickConnect?: () => void }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<TransferFilter>("all");
+  const [targetChooserOpen, setTargetChooserOpen] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLocaleLowerCase());
   const transfers = useTransferStore((state) => state.transfers);
   const setTransferStatus = useTransferStore((state) => state.setTransferStatus);
   const attachRequest = useTransferStore((state) => state.attachRequest);
   const clearFinished = useTransferStore((state) => state.clearFinished);
-  const { tabs, activeTabId, setActiveTab, setActivePane, setCurrentView, requestPaneTool } = useAppStore();
+  const { tabs, addTab, setActiveTab, setActivePane, setCurrentView, requestPaneTool } = useAppStore();
   const addToast = useToastStore((state) => state.addToast);
 
   const ownerFor = (transfer: TransferRecord) => tabs.find((tab) =>
@@ -49,7 +60,7 @@ export function TransfersView({ onQuickConnect = () => undefined }: { onQuickCon
     if (filter === "failed" && transfer.status !== "failed") return false;
     if (!deferredQuery) return true;
     const owner = ownerFor(transfer);
-    return [transfer.name, transfer.direction, transfer.status, transfer.request?.args.remotePath, owner?.sessionName, owner?.host]
+    return [transfer.name, transfer.direction, transfer.status, remotePathFor(transfer), owner?.sessionName, owner?.host]
       .some((value) => value?.toLocaleLowerCase().includes(deferredQuery));
   });
 
@@ -62,9 +73,29 @@ export function TransfersView({ onQuickConnect = () => undefined }: { onQuickCon
   };
 
   const startTransfer = () => {
-    const target = findConnectedSshPane(tabs, activeTabId);
-    if (!target) return onQuickConnect();
+    setTargetChooserOpen(true);
+  };
+
+  const selectConnectedTarget = (target: ConnectedSshTarget) => {
+    setTargetChooserOpen(false);
     requestPaneTool(target.tabId, target.paneId, "files", "sftp");
+  };
+
+  const selectSavedTarget = (session: Session) => {
+    setTargetChooserOpen(false);
+    const tabId = crypto.randomUUID();
+    addTab({
+      id: tabId,
+      sessionId: session.id,
+      sessionName: session.name,
+      host: session.host,
+      port: session.port,
+      protocol: "ssh",
+      status: "connecting",
+      pinned: false,
+      initialAuxiliaryPanel: "files",
+      initialTransferProtocol: "sftp",
+    });
   };
 
   const changeState = async (transfer: TransferRecord, action: "pause" | "resume" | "cancel") => {
@@ -158,12 +189,13 @@ export function TransfersView({ onQuickConnect = () => undefined }: { onQuickCon
             </div>
             {visibleTransfers.map((transfer) => {
               const owner = ownerFor(transfer);
+              const remotePath = remotePathFor(transfer);
               const percent = transfer.total > 0 ? Math.min(100, Math.round((transfer.transferred / transfer.total) * 100)) : 0;
               return (
                 <div key={transfer.id} className="grid min-h-12 grid-cols-[minmax(170px,1.4fr)_90px_minmax(160px,1.2fr)_150px_100px_110px] items-center gap-2 border-b border-dock-border/70 px-2.5 py-1.5 hover:bg-dock-surface">
                   <div className="min-w-0">
                     <p className="truncate text-xs font-medium text-dock-text" title={transfer.name}>{transfer.name}</p>
-                    <p className="truncate font-mono text-[9px] text-dock-text-muted" dir="ltr" title={transfer.request?.args.remotePath}>{transfer.request?.args.remotePath ?? t("transfers.runtimeTransfer")}</p>
+                    <p className="truncate font-mono text-[9px] text-dock-text-muted" dir="ltr" title={remotePath}>{remotePath ?? t("transfers.runtimeTransfer")}</p>
                   </div>
                   <span className="flex items-center gap-1 text-[10px] text-dock-text-muted">
                     {transfer.direction === "upload" ? <ArrowUpFromLine size={11} /> : <ArrowDownToLine size={11} />}
@@ -191,6 +223,15 @@ export function TransfersView({ onQuickConnect = () => undefined }: { onQuickCon
           </div>
         )}
       </div>
+      <ConnectionSelectorDialog
+        open={targetChooserOpen}
+        title={t("transfers.chooseTarget")}
+        hint={t("transfers.chooseTargetHint")}
+        onClose={() => setTargetChooserOpen(false)}
+        onConnected={selectConnectedTarget}
+        onSaved={selectSavedTarget}
+        onManual={() => { setTargetChooserOpen(false); onQuickConnect(); }}
+      />
     </div>
   );
 }

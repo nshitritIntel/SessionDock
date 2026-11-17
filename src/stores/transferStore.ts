@@ -2,11 +2,14 @@ import { create } from "zustand";
 
 export type TransferStatus = "running" | "paused" | "completed" | "failed" | "cancelled";
 export type TransferDirection = "upload" | "download";
+export interface TransferBatchItem { localPath: string; remotePath: string }
 export type TransferRequest =
   | { command: "start_sftp_upload"; args: { tabId: string; localPath: string; remotePath: string; overwrite: boolean } }
   | { command: "start_sftp_download"; args: { tabId: string; localPath: string; remotePath: string; overwrite: boolean } }
   | { command: "start_scp_upload"; args: { tabId: string; localPath: string; remotePath: string; overwrite: boolean } }
-  | { command: "start_scp_download"; args: { tabId: string; localPath: string; remotePath: string; overwrite: boolean } };
+  | { command: "start_scp_download"; args: { tabId: string; localPath: string; remotePath: string; overwrite: boolean } }
+  | { command: "start_sftp_upload_batch"; args: { tabId: string; items: TransferBatchItem[]; overwrite: boolean } }
+  | { command: "start_sftp_download_batch"; args: { tabId: string; items: TransferBatchItem[]; overwrite: boolean } };
 
 export interface TransferEvent {
   id: string;

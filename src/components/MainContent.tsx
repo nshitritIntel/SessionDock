@@ -13,6 +13,7 @@ import { ActiveConnectionsView } from "./views/ActiveConnectionsView";
 import { TransfersView } from "./views/TransfersView";
 import { TunnelsView } from "./views/TunnelsView";
 import { DiagnosticsView } from "./views/DiagnosticsView";
+import { NetworkHealthView } from "./views/NetworkHealthView";
 import type { Session } from "../types";
 
 interface MainContentProps {
@@ -67,7 +68,7 @@ export function MainContent({ onNewSession, onNewFolder, onQuickConnect, onImpor
               className={`absolute inset-0 ${showTerminal && tab.id === activeTabId ? "z-10" : "z-0 hidden"}`}
             >
               {tab.protocol === "vnc" ? (
-                <VncViewerView tab={tab} active={showTerminal === true && tab.id === activeTabId} />
+                <VncViewerView tab={tab} session={sess} active={showTerminal === true && tab.id === activeTabId} />
               ) : tab.protocol === "bmc" ? (
                 <BmcConsoleView tab={tab} active={showTerminal === true && tab.id === activeTabId} />
               ) : (
@@ -93,6 +94,8 @@ export function MainContent({ onNewSession, onNewFolder, onQuickConnect, onImpor
             <TunnelsView onQuickConnect={onQuickConnect} />
           ) : currentView === "diagnostics" ? (
             <DiagnosticsView onQuickConnect={onQuickConnect} />
+          ) : currentView === "networkHealth" ? (
+            <NetworkHealthView />
           ) : currentView === "allSessions" ? (
             <SessionList sessions={sessions} title="All Sessions" onConnect={handleConnect} onScpConnect={onScpSession} />
           ) : currentView === "favorites" ? (

@@ -3,13 +3,53 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo-audit
+        id: cargo-audit-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-audit
+          key: cargo-audit-${{ runner.os }}-0.22.2
+
+      - name: Install cargo-audit
+        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: Audit Rust dependencies
+        run: cargo audit
+        working-directory: src-tauri
+
+  create-draft:
+    needs: security-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release view "${{ github.ref_name }}" >/dev/null 2>&1 || \
+            gh release create "${{ github.ref_name }}" --draft --verify-tag --title "SessionDock ${{ github.ref_name }}" --notes-file CHANGELOG.md
+
   build-windows:
+    needs: create-draft
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +67,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: x86_64-pc-windows-msvc
 
       - name: Install dependencies
         run: npm ci
@@ -34,7 +75,7 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
-      - name: Run tests
+      - name: Run frontend tests
         run: npm test
 
       - name: Frontend lint
@@ -55,55 +96,51 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
         working-directory: src-tauri
 
-      - name: Cache cargo-audit
-        id: cargo-audit-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/cargo-audit
-          key: cargo-audit-${{ runner.os }}-0.22.2
-
-      - name: Install cargo-audit
-        if: steps.cargo-audit-cache.outputs.cache-hit != 'true'
-        run: cargo install cargo-audit --version 0.22.2 --locked
-
-      - name: Audit Rust dependencies
-        run: cargo audit
-        working-directory: src-tauri
-
       - name: Verify updater signing key
-        shell: pwsh
+        shell: bash
         env:
           UPDATER_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           UPDATER_SIGNING_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:UPDATER_SIGNING_KEY)) {
-            throw "TAURI_SIGNING_PRIVATE_KEY must be configured to publish signed updates."
-          }
-          if ([string]::IsNullOrWhiteSpace($env:UPDATER_SIGNING_PASSWORD)) {
-            throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD must be configured to publish signed updates."
-          }
+          test -n "$UPDATER_SIGNING_KEY" || { echo "TAURI_SIGNING_PRIVATE_KEY is required" >&2; exit 1; }
+          test -n "$UPDATER_SIGNING_PASSWORD" || { echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is required" >&2; exit 1; }
 
-      - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
+      - name: Build and upload signed artifacts
+        uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'SessionDock ${{ github.ref_name }}'
-          releaseBody: 'See CHANGELOG.md for details.'
-          releaseDraft: false
+          releaseName: "SessionDock ${{ github.ref_name }}"
+          releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: "--bundles nsis"
 
+  publish:
+    needs: build-windows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish fully assembled release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false
+
+  retain:
+    needs: publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
       - name: Retain current and previous releases
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          git fetch origin master
-          git checkout -B master origin/master
           ./scripts/retain-releases.ps1 -Repository ${{ github.repository }}
           git add --all --force release
           if (-not (git diff --cached --quiet)) {

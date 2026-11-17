@@ -109,10 +109,9 @@ describe("SftpPanel", () => {
     fireEvent.click(screen.getByLabelText("sftp.download"));
 
     await waitFor(() => {
-      expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download", {
+      expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download_batch", {
         tabId: "pane-download",
-        localPath: "C:\\downloads\\backup.cfg",
-        remotePath: "/backup.cfg",
+        items: [{ localPath: "C:\\downloads\\backup.cfg", remotePath: "/backup.cfg" }],
         overwrite: false,
       });
     });
@@ -145,10 +144,9 @@ describe("SftpPanel", () => {
     fireEvent.dragOver(remotePane, { dataTransfer: dropTransfer });
     fireEvent.drop(remotePane, { dataTransfer: dropTransfer });
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_upload", {
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_upload_batch", {
       tabId: "pane-drop-upload",
-      localPath: "C:\\configs\\switch.cfg",
-      remotePath: "/switch.cfg",
+      items: [{ localPath: "C:\\configs\\switch.cfg", remotePath: "/switch.cfg" }],
       overwrite: false,
     }));
   });
@@ -172,10 +170,9 @@ describe("SftpPanel", () => {
     fireEvent.dragOver(remoteFolder, { dataTransfer: dropTransfer });
     fireEvent.drop(remoteFolder, { dataTransfer: dropTransfer });
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_upload", {
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_upload_batch", {
       tabId: "pane-folder-upload",
-      localPath: "C:\\configs\\switch.cfg",
-      remotePath: "/archive/switch.cfg",
+      items: [{ localPath: "C:\\configs\\switch.cfg", remotePath: "/archive/switch.cfg" }],
       overwrite: false,
     }));
   });
@@ -205,10 +202,9 @@ describe("SftpPanel", () => {
     fireEvent.dragOver(localPane, { dataTransfer: dropTransfer });
     fireEvent.drop(localPane, { dataTransfer: dropTransfer });
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download", {
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download_batch", {
       tabId: "pane-drop-download",
-      localPath: "C:\\downloads\\backup.cfg",
-      remotePath: "/backup.cfg",
+      items: [{ localPath: "C:\\downloads\\backup.cfg", remotePath: "/backup.cfg" }],
       overwrite: false,
     }));
   });
@@ -232,10 +228,9 @@ describe("SftpPanel", () => {
     fireEvent.dragOver(localFolder, { dataTransfer: dropTransfer });
     fireEvent.drop(localFolder, { dataTransfer: dropTransfer });
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download", {
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download_batch", {
       tabId: "pane-folder-download",
-      localPath: "C:\\downloads\\archive\\backup.cfg",
-      remotePath: "/backup.cfg",
+      items: [{ localPath: "C:\\downloads\\archive\\backup.cfg", remotePath: "/backup.cfg" }],
       overwrite: false,
     }));
   });
@@ -261,10 +256,34 @@ describe("SftpPanel", () => {
     fireEvent.dragOver(localPane, { dataTransfer: dropTransfer });
     fireEvent.drop(localPane, { dataTransfer: dropTransfer });
 
-    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download", {
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download_batch", {
       tabId: "pane-webview-download",
-      localPath: "C:\\downloads\\backup.cfg",
-      remotePath: "/backup.cfg",
+      items: [{ localPath: "C:\\downloads\\backup.cfg", remotePath: "/backup.cfg" }],
+      overwrite: false,
+    }));
+  });
+
+  it("downloads a Ctrl-selected remote folder and file as one batch", async () => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "list_local_directory") return { path: "C:\\downloads", entries: [] };
+      if (command === "list_sftp_directory") return [
+        { name: "configs", path: "/configs", kind: "directory" },
+        { name: "notes.txt", path: "/notes.txt", kind: "file", size: 4 },
+      ];
+      return "download-batch-1";
+    });
+    render(<SftpPanel tabId="pane-batch-download" onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText("configs"));
+    fireEvent.click(screen.getByText("notes.txt"), { ctrlKey: true });
+    fireEvent.click(screen.getByLabelText("sftp.download"));
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_sftp_download_batch", {
+      tabId: "pane-batch-download",
+      items: [
+        { localPath: "C:\\downloads\\configs", remotePath: "/configs" },
+        { localPath: "C:\\downloads\\notes.txt", remotePath: "/notes.txt" },
+      ],
       overwrite: false,
     }));
   });

@@ -26,6 +26,7 @@ import {
   ArrowRightLeft,
   Network,
   Stethoscope,
+  HeartPulse,
 } from "lucide-react";
 
 interface SidebarProps {
@@ -122,6 +123,7 @@ export function Sidebar({ width, onResize, onNewSession, onEditSession, onNewFol
     { view: "transfers", icon: ArrowRightLeft, label: t("sidebar.transfers") },
     { view: "tunnels", icon: Network, label: t("sidebar.tunnels") },
     { view: "diagnostics", icon: Stethoscope, label: t("sidebar.diagnostics") },
+    { view: "networkHealth", icon: HeartPulse, label: t("sidebar.networkHealth") },
   ];
   const activeConnectionCount = tabs.reduce((count, tab) => count + listTerminalPaneIds(tab.paneLayout ?? { type: "pane", id: tab.id }).length, 0);
 

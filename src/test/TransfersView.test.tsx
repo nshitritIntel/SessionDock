@@ -1,8 +1,9 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TransfersView } from "../components/views/TransfersView";
 import { useAppStore } from "../stores/appStore";
 import { useTransferStore } from "../stores/transferStore";
+import { useSessionStore } from "../stores/sessionStore";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn() }));
 
@@ -41,6 +42,7 @@ describe("TransfersView", () => {
         updatedAt: 1,
       }],
     });
+    useSessionStore.setState({ sessions: [] });
   });
 
   it("shows runtime progress and focuses the owning pane", () => {
@@ -54,10 +56,11 @@ describe("TransfersView", () => {
     expect(useAppStore.getState().tabs[0].activePaneId).toBe("pane-1");
   });
 
-  it("opens Files on a connected SSH pane to start a transfer", () => {
+  it("asks before opening Files on a connected SSH pane", () => {
     render(<TransfersView />);
 
     fireEvent.click(screen.getByRole("button", { name: "transfers.start" }));
+    fireEvent.click(within(screen.getByRole("dialog")).getByText("Core switch"));
 
     expect(useAppStore.getState()).toMatchObject({ activeTabId: "tab-1", currentView: "terminal" });
     expect(useAppStore.getState().tabs[0]).toMatchObject({
@@ -68,15 +71,35 @@ describe("TransfersView", () => {
     });
   });
 
-  it("opens Quick Connect when no SSH pane is connected", () => {
+  it("offers Quick Connect when no SSH target exists", () => {
     useAppStore.setState({ tabs: [], activeTabId: null });
     useTransferStore.setState({ transfers: [] });
     const onQuickConnect = vi.fn();
     render(<TransfersView onQuickConnect={onQuickConnect} />);
 
     fireEvent.click(screen.getAllByRole("button", { name: "transfers.start" })[0]);
+    fireEvent.click(screen.getByRole("button", { name: "connectionSelector.manual" }));
 
     expect(onQuickConnect).toHaveBeenCalledOnce();
+  });
+
+  it("opens Files after explicitly selecting a saved SSH session", () => {
+    useAppStore.setState({ tabs: [], activeTabId: null });
+    useSessionStore.setState({ sessions: [{
+      id: "saved-1", name: "Saved leaf", host: "192.0.2.30", port: 22, protocol: "ssh",
+      authentication_method: "password", jump_host_ids: [], favorite: false,
+      connection_timeout: 30, keepalive_interval: 60, created_at: "2026-01-01",
+      updated_at: "2026-01-01", connection_count: 0, bmc_use_https: true,
+      bmc_viewer_mode: "web", bmc_ignore_tls_errors: false,
+      bmc_open_console_automatically: false, bmc_open_fullscreen: false,
+      bmc_timeout_seconds: 30, bmc_redfish_enabled: true, bmc_cookie_persistence: "application",
+    }] });
+    render(<TransfersView />);
+
+    fireEvent.click(screen.getByRole("button", { name: "transfers.start" }));
+    fireEvent.click(screen.getByText("Saved leaf"));
+
+    expect(useAppStore.getState().tabs[0]).toMatchObject({ sessionId: "saved-1", initialAuxiliaryPanel: "files" });
   });
 
   it("pauses through the native transfer manager", async () => {

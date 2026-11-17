@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { ChevronUp, File, Folder, FolderPlus, HardDrive, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { nativeInvoke } from "../../api/native";
@@ -24,6 +24,7 @@ interface LocalDirectoryListing {
 export interface LocalFileSelection {
   directoryPath?: string;
   entry?: LocalEntry;
+  entries?: LocalEntry[];
 }
 
 interface LocalFileBrowserProps {
@@ -48,12 +49,13 @@ export function LocalFileBrowser({ onSelectionChange, onRemoteFileDrop }: LocalF
   const dropDepth = useRef(0);
   const [listing, setListing] = useState<LocalDirectoryListing>({ entries: [] });
   const [pathInput, setPathInput] = useState("");
-  const [selectedPath, setSelectedPath] = useState<string>();
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [editAction, setEditAction] = useState<EditAction>();
   const [dropActive, setDropActive] = useState(false);
-  const selected = listing.entries.find((entry) => entry.path === selectedPath);
+  const selectedEntries = listing.entries.filter((entry) => selectedPaths.includes(entry.path));
+  const selected = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
 
   const loadDirectory = useCallback(async (path?: string): Promise<boolean> => {
     setLoading(true);
@@ -62,7 +64,7 @@ export function LocalFileBrowser({ onSelectionChange, onRemoteFileDrop }: LocalF
       const result = await nativeInvoke<LocalDirectoryListing>("list_local_directory", { path: path || null });
       setListing(result);
       setPathInput(result.path ?? "");
-      setSelectedPath(undefined);
+      setSelectedPaths([]);
       setLastLocalDirectory(result.path);
       onSelectionChange({ directoryPath: result.path });
       return true;
@@ -83,9 +85,15 @@ export function LocalFileBrowser({ onSelectionChange, onRemoteFileDrop }: LocalF
     })();
   }, [initialDirectory, loadDirectory, setLastLocalDirectory]);
 
-  const selectEntry = (entry: LocalEntry) => {
-    setSelectedPath(entry.path);
-    onSelectionChange({ directoryPath: listing.path, entry });
+  const selectEntry = (entry: LocalEntry, event: MouseEvent) => {
+    const nextPaths = event.ctrlKey || event.metaKey
+      ? selectedPaths.includes(entry.path)
+        ? selectedPaths.filter((path) => path !== entry.path)
+        : [...selectedPaths, entry.path].slice(0, 256)
+      : [entry.path];
+    const entries = listing.entries.filter((candidate) => nextPaths.includes(candidate.path));
+    setSelectedPaths(nextPaths);
+    onSelectionChange({ directoryPath: listing.path, entry: entries.length === 1 ? entries[0] : undefined, entries });
   };
 
   const submitEdit = async () => {
@@ -177,8 +185,11 @@ export function LocalFileBrowser({ onSelectionChange, onRemoteFileDrop }: LocalF
         {!loading && error && <div className="p-3 text-xs text-red-400 break-words" role="alert">{error}</div>}
         {!loading && !error && listing.entries.length === 0 && <div className="p-4 text-center text-xs text-dock-text-muted">{t("sftp.empty")}</div>}
         {!loading && !error && listing.entries.map((entry) => (
-          <button key={entry.path} type="button" role="option" aria-selected={selectedPath === entry.path} draggable={entry.kind === "file"} onDragStart={(event) => {
-            if (entry.kind === "file") setFileDragPayload(event.dataTransfer, LOCAL_FILE_DRAG_TYPE, { name: entry.name, path: entry.path });
+          <button key={entry.path} type="button" role="option" aria-selected={selectedPaths.includes(entry.path)} draggable={entry.kind === "file" || entry.kind === "directory"} onDragStart={(event) => {
+            if (entry.kind !== "file" && entry.kind !== "directory") return;
+            const dragEntries = selectedPaths.includes(entry.path) ? selectedEntries : [entry];
+            const items = dragEntries.filter((item) => item.kind === "file" || item.kind === "directory").map((item) => ({ name: item.name, path: item.path, kind: item.kind as "file" | "directory" }));
+            if (items.length > 0) setFileDragPayload(event.dataTransfer, LOCAL_FILE_DRAG_TYPE, { ...items[0], items });
           }} onDragEnd={clearFileDragPayload} onDragEnter={(event) => {
             if (entry.kind !== "directory") return;
             event.stopPropagation();
@@ -199,9 +210,9 @@ export function LocalFileBrowser({ onSelectionChange, onRemoteFileDrop }: LocalF
             dropDepth.current = 0;
             setDropActive(false);
             dropRemoteFile(event, entry.path);
-          }} onClick={() => selectEntry(entry)} onDoubleClick={() => {
+          }} onClick={(event) => selectEntry(entry, event)} onDoubleClick={() => {
             if (entry.kind === "drive" || entry.kind === "directory") void loadDirectory(entry.path);
-          }} className={`w-full h-8 px-2 grid grid-cols-[18px_minmax(0,1fr)_62px] items-center gap-1 text-start border-b border-dock-border/40 hover:bg-dock-surface-hover focus:outline-none focus:bg-dock-surface-hover ${selectedPath === entry.path ? "bg-dock-surface" : ""}`}>
+          }} className={`w-full h-8 px-2 grid grid-cols-[18px_minmax(0,1fr)_62px] items-center gap-1 text-start border-b border-dock-border/40 hover:bg-dock-surface-hover focus:outline-none focus:bg-dock-surface-hover ${selectedPaths.includes(entry.path) ? "bg-dock-surface" : ""}`}>
             {entry.kind === "drive" ? <HardDrive size={14} className="text-dock-accent" /> : entry.kind === "directory" ? <Folder size={14} className="text-amber-400" /> : <File size={14} className={entry.kind === "symlink" ? "text-dock-warning" : "text-dock-text-muted"} />}
             <span className="truncate text-[11px] text-dock-text" dir="auto" title={entry.name}>{entry.name}</span>
             <span className="text-[10px] text-dock-text-muted text-end tabular-nums">{entry.kind === "file" ? formatTransferSize(entry.size ?? 0) : ""}</span>

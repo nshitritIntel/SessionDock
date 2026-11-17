@@ -1,6 +1,6 @@
 [package]
 name = "sessiondock"
-version = "1.1.3"
+version = "2.0.0"
 description = "Terminal Session Manager"
 authors = ["SessionDock Contributors"]
 edition = "2021"
@@ -30,6 +30,9 @@ thiserror = "2"
 dirs = "6"
 log = "0.4"
 env_logger = "0.11"
+fs2 = "0.4"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake"] }
 serialport = "4"
 anyhow = "1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
@@ -39,11 +42,13 @@ tauri-plugin-clipboard-manager = "2"
 
 [target.'cfg(windows)'.dependencies]
 keyring = { version = "3", features = ["windows-native"] }
+notify-rust = "4.11"
 winapi = { version = "0.3", features = ["winbase", "winhttp"] }
 winreg = "0.55"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "3", features = ["apple-native"] }
+notify-rust = "4.11"
 
 # SSH crates - uncomment when implementing full SSH protocol
 # russh = "0.46"

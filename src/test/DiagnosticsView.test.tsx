@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiagnosticsView } from "../components/views/DiagnosticsView";
 import { useAppStore } from "../stores/appStore";
 import { useDiagnosticStore } from "../stores/diagnosticStore";
+import { useSessionStore } from "../stores/sessionStore";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), writeText: vi.fn() }));
 
@@ -49,6 +50,7 @@ describe("DiagnosticsView", () => {
       }],
     });
     useDiagnosticStore.setState({ diagnostics: [completedDiagnostic] });
+    useSessionStore.setState({ sessions: [] });
   });
 
   it("shows raw output and focuses the owning pane", () => {
@@ -114,15 +116,35 @@ describe("DiagnosticsView", () => {
     expect(useAppStore.getState().tabs[1]).toMatchObject({ toolPaneId: "pane-2", toolPanel: "device" });
   });
 
-  it("opens Quick Connect when no SSH device is connected", () => {
+  it("offers Quick Connect when no SSH target exists", () => {
     useAppStore.setState({ tabs: [], activeTabId: null });
     const onQuickConnect = vi.fn();
     render(<DiagnosticsView onQuickConnect={onQuickConnect} />);
 
     fireEvent.click(screen.getByRole("button", { name: "diagnosticsWorkspace.start" }));
+    fireEvent.click(screen.getByRole("button", { name: "connectionSelector.manual" }));
 
     expect(onQuickConnect).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("opens Device Info after explicitly selecting a saved SSH session", () => {
+    useAppStore.setState({ tabs: [], activeTabId: null });
+    useSessionStore.setState({ sessions: [{
+      id: "saved-1", name: "Saved spine", host: "192.0.2.40", port: 22, protocol: "ssh",
+      authentication_method: "password", jump_host_ids: [], favorite: false,
+      connection_timeout: 30, keepalive_interval: 60, created_at: "2026-01-01",
+      updated_at: "2026-01-01", connection_count: 0, bmc_use_https: true,
+      bmc_viewer_mode: "web", bmc_ignore_tls_errors: false,
+      bmc_open_console_automatically: false, bmc_open_fullscreen: false,
+      bmc_timeout_seconds: 30, bmc_redfish_enabled: true, bmc_cookie_persistence: "application",
+    }] });
+    render(<DiagnosticsView />);
+
+    fireEvent.click(screen.getByRole("button", { name: "diagnosticsWorkspace.start" }));
+    fireEvent.click(screen.getByText("Saved spine"));
+
+    expect(useAppStore.getState().tabs[0]).toMatchObject({ sessionId: "saved-1", initialAuxiliaryPanel: "device" });
   });
 
   it("cancels active work through the native diagnostics manager", async () => {

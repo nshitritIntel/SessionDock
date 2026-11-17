@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { BmcSessionConfig, Protocol } from "../types";
 
-export type ViewMode = "home" | "terminal" | "allSessions" | "favorites" | "recent" | "folder" | "group" | "activeConnections" | "transfers" | "tunnels" | "diagnostics" | "settings" | "credentials" | "tags";
+export type ViewMode = "home" | "terminal" | "allSessions" | "favorites" | "recent" | "folder" | "group" | "activeConnections" | "transfers" | "tunnels" | "diagnostics" | "networkHealth" | "settings" | "credentials" | "tags";
 
 export type ConnectionStatus =
   | "idle"

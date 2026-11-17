@@ -5,7 +5,10 @@ mod credential_vault;
 mod db;
 mod error;
 mod models;
+mod monitor_alerts;
+mod monitor_worker;
 mod protocols;
+mod providers;
 mod terminal;
 mod updater_proxy;
 
@@ -14,8 +17,48 @@ use commands::multi_exec::MultiExecManager;
 use commands::sftp::SftpTransferManager;
 use commands::terminal_logging::TerminalLogManager;
 use commands::tunnels::SshTunnelManager;
+use commands::vnc::VncProxyManager;
 pub use db::Database;
 pub use error::AppError;
+
+pub async fn run_monitor_worker(app_data_dir: std::path::PathBuf) -> Result<(), AppError> {
+    monitor_worker::run(app_data_dir).await
+}
+
+fn spawn_monitor_worker(app_data_dir: &std::path::Path) -> Result<(), AppError> {
+    monitor_worker::clear_shutdown_request(app_data_dir)?;
+    let executable = std::env::current_exe()?;
+    let mut command = std::process::Command::new(executable);
+    command
+        .arg("--monitor-worker")
+        .arg(app_data_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0000_0008 | 0x0000_0200);
+    }
+    command.spawn()?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_monitor_worker_for_update(app: tauri::AppHandle) -> Result<(), AppError> {
+    let app_data_dir = app.path().app_data_dir().map_err(|error| {
+        AppError::Generic(format!("Could not locate application data: {error}"))
+    })?;
+    monitor_worker::request_shutdown(&app_data_dir).await
+}
+
+#[tauri::command]
+fn restart_monitor_worker_after_update_failure(app: tauri::AppHandle) -> Result<(), AppError> {
+    let app_data_dir = app.path().app_data_dir().map_err(|error| {
+        AppError::Generic(format!("Could not locate application data: {error}"))
+    })?;
+    spawn_monitor_worker(&app_data_dir)
+}
 use terminal::{NativeSshManager, SerialManager, TelnetManager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -40,6 +83,10 @@ pub fn run() {
             let db_path = app_data_dir.join("sessiondock.db");
             let database = Database::new(&db_path).expect("Failed to initialize database");
 
+            if let Err(error) = spawn_monitor_worker(&app_data_dir) {
+                log::warn!("Could not start monitor worker: {error}");
+            }
+
             app.manage(database);
             app.manage(NativeSshManager::new());
             app.manage(SftpTransferManager::new());
@@ -49,6 +96,7 @@ pub fn run() {
             app.manage(TerminalLogManager::new());
             app.manage(TelnetManager::new());
             app.manage(SerialManager::new());
+            app.manage(VncProxyManager::new());
 
             log::info!("SessionDock initialized. DB: {:?}", db_path);
             Ok(())
@@ -104,7 +152,9 @@ pub fn run() {
             commands::sftp::rename_sftp_entry,
             commands::sftp::delete_sftp_entry,
             commands::sftp::start_sftp_upload,
+            commands::sftp::start_sftp_upload_batch,
             commands::sftp::start_sftp_download,
+            commands::sftp::start_sftp_download_batch,
             commands::sftp::pause_sftp_transfer,
             commands::sftp::resume_sftp_transfer,
             commands::sftp::cancel_sftp_transfer,
@@ -120,6 +170,22 @@ pub fn run() {
             commands::multi_exec::classify_multi_exec_command,
             commands::multi_exec::start_multi_exec,
             commands::multi_exec::cancel_multi_exec,
+            commands::monitoring::create_monitor_definition,
+            commands::monitoring::get_monitor_definitions,
+            commands::monitoring::set_monitor_enabled,
+            commands::monitoring::delete_monitor_definition,
+            commands::monitoring::run_monitor_now,
+            commands::monitoring_data::get_monitor_samples,
+            commands::monitoring_data::get_monitor_sample_detail,
+            commands::monitoring_data::get_monitor_incidents,
+            commands::monitoring_data::acknowledge_monitor_incident,
+            commands::monitoring_data::capture_monitor_baseline,
+            commands::monitoring_data::get_monitor_baselines,
+            commands::monitoring_data::compare_monitor_baseline,
+            commands::monitoring_data::delete_monitor_baseline,
+            commands::monitoring_data::create_monitor_maintenance,
+            commands::monitoring_data::get_monitor_maintenance,
+            commands::monitoring_data::delete_monitor_maintenance,
             commands::snippets::get_snippets,
             commands::snippets::create_snippet,
             commands::snippets::update_snippet,
@@ -131,6 +197,10 @@ pub fn run() {
             commands::bmc::close_bmc_webview,
             commands::bmc::test_bmc_connection,
             commands::vnc::launch_vnc_viewer,
+            commands::vnc::start_vnc_proxy,
+            commands::vnc::stop_vnc_proxy,
+            stop_monitor_worker_for_update,
+            restart_monitor_worker_after_update_failure,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
