@@ -4,7 +4,7 @@ version = "2.0.0"
 description = "Terminal Session Manager"
 authors = ["SessionDock Contributors"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.89"
 
 [lib]
 name = "sessiondock_lib"
@@ -20,7 +20,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.41.1", features = ["bundled"] }
 keyring = "3"
 ssh2 = "0.9"
 tokio = { version = "1", features = ["full"] }

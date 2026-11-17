@@ -798,7 +798,7 @@ pub async fn list_ssh_tunnels(
     let tunnels = manager.tunnels.lock().await;
     Ok(tunnels
         .values()
-        .filter(|tunnel| tab_id.as_ref().map_or(true, |id| tunnel.info.tab_id == *id))
+        .filter(|tunnel| tab_id.as_ref().is_none_or(|id| tunnel.info.tab_id == *id))
         .map(|tunnel| tunnel.info.clone())
         .collect())
 }

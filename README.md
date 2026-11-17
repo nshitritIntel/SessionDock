@@ -199,7 +199,7 @@ Download `SessionDock_2.0.0_x64-setup.exe` from the [v2.0.0 GitHub release](http
 ### Prerequisites
 
 - [Node.js](https://nodejs.org/) >= 18
-- [Rust](https://rustup.rs/) >= 1.77 (run `rustup default stable`)
+- [Rust](https://rustup.rs/) >= 1.89 (run `rustup default stable`)
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with "Desktop development with C++" workload
 - [Tauri CLI](https://v2.tauri.app/start/prerequisites/) (installed via npm)
 
