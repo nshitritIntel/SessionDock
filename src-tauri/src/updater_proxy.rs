@@ -1,3 +1,4 @@
+#[cfg(target_os = "windows")]
 const UPDATE_ENDPOINT: &str =
     "https://github.com/Nave1/SessionDock/releases/latest/download/latest.json";
 
@@ -12,6 +13,7 @@ pub fn configure() {
     }
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn select_proxy(value: &str) -> Option<String> {
     let entries: Vec<&str> = value
         .split(';')
