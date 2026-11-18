@@ -5,40 +5,77 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-17
+
+### Added
+
+- Add persistent Arista EOS interface monitoring through trusted saved SSH sessions and a fixed provider-owned JSON command
+- Add the Network Health workspace with status rollups, retained samples, incident acknowledgement, copied baselines, comparisons, and maintenance windows
+- Add native incident notifications with occurrence deduplication, a one-hour cooldown, and maintenance suppression
+- Add an integrated noVNC workspace through a tokenized loopback WebSocket bridge, with scaling, view-only mode, reconnect controls, and an external RealVNC fallback
+- Add a detached, lock-protected monitor worker that continues after the main window exits
+
+### Changed
+
+- Download updates before gracefully stopping the monitor worker, then restart monitoring if installation fails
+- Publish this release for Windows x64 first; macOS ARM64 remains deferred until Apple signing, notarization, and physical-device validation are complete
+- Update frontend and Rust dependency locks, including patched Vitest, Vite, SQLite, compression, and QUIC transitive dependencies
+
+### Fixed
+
+- Persist failed monitor executions and execution incidents instead of silently dropping failed runs
+- Preserve baseline snapshots independently of sample retention
+- Use the correct jump-session relationship while resolving monitored SSH routes
+- Clear quick-connect VNC passwords after noVNC receives them
+
+### Security
+
+- Restrict the VNC bridge to loopback, an unguessable path token, approved SessionDock origins, and binary WebSocket frames
+- Add a restrictive main-WebView Content Security Policy for local Tauri IPC, assets, and scoped loopback connections
+- Keep monitoring commands backend-allowlisted and prevent credentials or executable command text from entering monitoring storage
+- Bundle noVNC attribution and MPL-2.0 source information
+
 ## [1.1.3] - 2026-10-28
 
 ### Fixed
+
 - Register a standard drag format so Windows WebView2 accepts remote-to-local and local-to-remote SCP/SFTP file drops
 - Recover the bounded internal file payload when WebView2 withholds the custom drag format at drop time
 
 ### Security
+
 - Keep file paths out of the standard drag data and retain existing backend path validation, overwrite handling, and SCP confirmation
 - Update the Tauri updater stack to remove the vulnerable `zip 4.6.1` extraction dependency reported by RUSTSEC-2026-0367, RUSTSEC-2026-0368, and RUSTSEC-2026-0369
 
 ## [1.1.2] - 2026-10-28
 
 ### Fixed
+
 - Accept validated internal file drops when WebView2 does not expose custom drag types during drag-over
 - Upload or download a dragged file into the local or remote directory row under the pointer, while retaining current-directory drops
 - Keep Favorites, Recent, All Sessions, and folder views visible when terminal sessions remain open
 - Ask which connected SSH device should receive a diagnostic before opening Device Info instead of silently choosing the active session
 
 ### Security
+
 - Continue parsing bounded internal drag payloads before transfer requests and keep destination paths behind existing Rust validation, overwrite handling, and SCP confirmation
 - Limit diagnostic target selection to currently connected SSH panes and keep provider diagnostics allowlisted by the backend
 
 ## [1.1.1] - 2026-10-26
 
 ### Added
+
 - Drag individual files between the local and remote Files panes to start SFTP or explicitly confirmed SCP transfers through the existing transfer queue
 - Copy diagnostic raw output with a dedicated action while preserving normal mouse and keyboard text selection
 
 ### Fixed
+
 - Restore the last successfully opened local directory when a later SCP or SFTP Files panel opens without persisting the remote directory
 - Persist bounded diagnostic history locally across application restarts until **Clear finished** is used
 - Rehydrate interrupted diagnostic jobs as cancelled instead of displaying stale running state
 
 ### Security
+
 - Validate and bound persisted diagnostic records, local paths, and internal drag payloads before use
 - Keep drag-and-drop transfers behind the existing Rust path validation, overwrite handling, and SCP upload confirmation
 - Compact only the oldest persisted raw output if browser storage reaches its bounded capacity while retaining diagnostic records
@@ -46,25 +83,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.1.0] - 2026-10-22
 
 ### Added
+
 - Add an integrated WinSCP-style dual-pane Files workspace with local drives and folders on the left and the connected device on the right
 - Navigate local drives and directories and create, rename, or delete local entries without launching an external file-transfer application
 - Upload a selected local file or download a selected remote file directly into the current local directory
 
 ### Changed
+
 - Keep remote directory browsing on the authenticated SFTP subsystem while allowing explicit SCP single-file transfers for compatible SSH servers
 - Reuse the existing streaming transfer queue for dual-pane progress, pause, resume, cancel, retry, staging, and overwrite handling
 
 ### Security
+
 - Expose local filesystem operations through narrow path-validated Rust commands instead of broad frontend filesystem access
 - Reject local path control characters, unsafe entry names, symlink deletion, recursive deletion, and implicit overwrite
 
 ## [1.0.2] - 2026-10-22
 
 ### Fixed
+
 - Enable the native Windows Credential Manager backend so password profiles persist across independent vault entries and SSH connections
 - Verify every vault write through a fresh operating-system credential entry before saving credential profile metadata
 
 ### Security
+
 - Fail credential creation or password replacement immediately when the operating-system vault cannot read back the saved secret
 - Remove an unverified vault entry instead of retaining credential metadata that cannot authenticate
 
@@ -73,10 +115,12 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 ## [1.0.1] - 2026-10-22
 
 ### Added
+
 - Edit credential profile names and usernames, replace vault passwords, and explicitly reveal the current password from the edit dialog
 - Start an SCP connection for a saved SSH session from its sidebar context menu or session-list action while reusing Quick Connect credential selection
 
 ### Fixed
+
 - Reject new password credential profiles without a vault secret and report existing profiles whose saved password is missing
 - Apply Quick Connect credentials through the existing camel-case IPC contract and preserve vault secrets during metadata-only credential edits
 - Replace the deprecated Arista EOS `show environment all` quick command with `show system environment all`
@@ -84,12 +128,14 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 - Remove tab-restoration, application-lock, SSH-agent-selection, timeout, and density controls that did not have a safe or supported implementation
 
 ### Security
+
 - Retrieve an existing credential secret only after an explicit reveal action and keep it in dialog-local memory
 - Continue storing credential secrets exclusively in the operating-system vault; SQLite, exports, logs, and persisted frontend state contain metadata only
 
 ## [1.0.0] - 2026-10-21
 
 ### Added
+
 - Add compact session deletion actions to sidebar rows and their context menus, with confirmation and dependency-safe backend validation
 - Add SCP to Quick Connect as a discoverable SSH-backed transfer mode that opens the Files panel ready for SCP
 - Add saved password credential selection to Quick Connect while keeping credential secrets in the OS vault and backend
@@ -97,12 +143,14 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 - Add Windows registry serial-port discovery as a fallback to native enumeration, with deduplication and natural COM-port sorting
 
 ### Fixed
+
 - Remove the misleading COM3 placeholder when no serial port has been detected
 - Route operational workspace start actions to Quick Connect when no SSH pane is connected
 
 ## [0.10.0] - 2026-10-21
 
 ### Added
+
 - Add native OpenSSH private-key and SSH-agent authentication for saved SSH sessions
 - Add OS-vault credential profiles for SSH passwords and encrypted-key passphrases
 - Add explicit first-use SSH host-key trust and trusted-host management
@@ -126,6 +174,7 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 - Add a global Diagnostics workspace with cross-pane status, filtering, owner focus, cancellation, rerun, explicit raw output, and bounded runtime history
 
 ### Security
+
 - Remove the unused legacy connection IPC and incomplete SSH/Telnet facades so connection lifecycle commands use only the authenticated, host-key-verified native terminal path
 - Enforce SSH host-key verification in the Rust connection path before all authentication methods
 - Block changed host keys without one-click replacement and keep private keys and passphrases out of SQLite and exports
@@ -152,41 +201,49 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 - Enforce frontend, Rust, and dependency-security gates before publishing signed release artifacts
 
 ### Fixed
+
 - Defer xterm fitting while terminal panes are hidden so background connections initialize without zero-dimension rendering errors
 - Restore frontend linting with an ESLint 9 flat config and enforce it in CI alongside TypeScript and React hook checks
 
 ## [0.9.7] - 2026-10-06
 
 ### Added
+
 - Add detected COM port and serial speed selection to saved sessions and Quick Connect
 
 ### Fixed
+
 - Connect serial tabs through the native in-process serial backend with persistent baud-rate settings
 - Keep forms, home actions, terminal controls, and the sidebar usable in narrow application windows
 
 ## [0.9.6] - 2026-08-18
 
 ### Fixed
+
 - Keep interactive SSH input responsive by avoiding a blocking flush after every keystroke
 
 ## [0.9.5] - 2026-08-18
 
 ### Fixed
+
 - Prevent SSH sessions from freezing when writes, terminal resizes, or disconnects wait on a stalled transport
 - Preserve ordered terminal input while nonblocking SSH writes retry without stopping incoming output
 
 ## [0.9.4] - 2026-08-10
 
 ### Fixed
+
 - Keep SSH sessions active when an optional keepalive message cannot be sent, while continuing to detect real channel and socket closure
 - Reset terminal modes, viewport, and scrollback after the old connection closes so reconnect starts with a fresh terminal
 
 ## [0.9.3] - 2026-08-10
 
 ### Added
+
 - Disconnect the active terminal connection explicitly with Ctrl+Q while keeping its tab available for reconnection
 
 ### Fixed
+
 - Keep SSH sessions connected when libssh2 reports a nonblocking `transport read` polling condition
 - Copy selected terminal text to the native OS clipboard so it can be pasted into other applications
 - Make terminal right-click copy selected text and paste only when no text is selected
@@ -194,30 +251,37 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 ## [0.9.2] - 2026-08-06
 
 ### Changed
+
 - Open VNC connections through RealVNC Viewer Address Book entries so credentials remembered on the first connection are reused automatically
 
 ## [0.9.1] - 2026-08-06
 
 ### Added
+
 - Add VNC as a standalone saved and Quick Connect protocol with a default port of 5900
 - Open VNC desktops in RealVNC Viewer without placing credentials in process arguments
 
 ### Changed
+
 - Keep VNC configuration separate from browser-based BMC / KVM sessions
 
 ### Fixed
+
 - Prevent legacy BMC VNC settings from falling through to an HTTPS WebView
 
 ## [0.9.0] - 2026-08-06
 
 ### Added
+
 - Split SSH and Telnet terminals right or down into mixed layouts of up to four independent panes
 - Copy selected terminal text with Ctrl+C and paste clipboard text with Ctrl+V or right-click
 
 ### Changed
+
 - Show BMC sessions with a sky-blue protocol indicator in the sidebar
 
 ### Fixed
+
 - Erase masked password characters correctly with Backspace
 - Retry short-lived SSH `transport read` failures instead of disconnecting immediately
 - Reconnect a closed terminal by pressing Enter and make the tab-bar reconnect control functional
@@ -227,35 +291,42 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 ## [0.8.3] - 2026-08-05
 
 ### Changed
+
 - Increase secondary and muted text contrast in light and dark modes
 - Give closed folders a distinct burnished-amber icon color
 
 ### Fixed
+
 - Show previously connected sessions in newest-first order in the Recent tab
 
 ## [0.8.2] - 2026-08-05
 
 ### Fixed
+
 - Resolve Windows PAC/WPAD proxy settings before checking for or downloading updates
 
 ## [0.8.1] - 2026-08-05
 
 ### Fixed
+
 - Keep nested folders collapsed when a parent folder is closed and reopened
 
 ## [0.8.0] - 2026-08-05
 
 ### Added
+
 - Signed in-app updates with automatic checks, download progress, active-session warnings, installation, and restart
 - Resizable sidebar with persisted width and keyboard controls
 - Right-click session editing from the folder tree and session lists
 - Folder hierarchy and session placement preservation in JSON and CSV export/import
 
 ### Changed
+
 - CSV exports now include backward-compatible folder and parent records
 - Release automation now produces signed Windows updater artifacts and `latest.json`
 
 ### Fixed
+
 - Prevent transient zero-byte SSH reads from being treated as disconnections
 - Enable configured SSH keepalives and report remote EOF, exit status, transport errors, and keepalive failures
 - Remove stale SSH connections and restore nonblocking mode after write failures
@@ -263,12 +334,14 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 - Preserve BMC protocol and metadata during import
 
 ### Security
+
 - Verify updater packages with an embedded public key while keeping signing credentials outside Git
 - Continue excluding credentials and sensitive BMC URL parameters from exported data
 
 ## [0.7.0] - 2026-08-03
 
 ### Added
+
 - Saved and Quick Connect BMC / KVM over IP sessions with Dell iDRAC, HPE iLO, Lenovo XClarity, and Supermicro presets
 - Restricted native child WebViews with per-tab lifecycle, native bounds, external-browser mode, reload controls, and cookie policy
 - HTTP(S) reachability and Redfish diagnostics with structured status and latency results
@@ -276,6 +349,7 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 - English and Hebrew BMC configuration strings
 
 ### Security
+
 - Scope privileged Tauri capabilities to the main application WebView so remote BMC pages receive no SessionDock IPC permissions
 - Deny BMC popup creation, restrict navigation to HTTP(S), reject embedded URL credentials, and disable devtools
 - Omit token-, ticket-, password-, and session-bearing console URLs from persistence and exports
@@ -284,6 +358,7 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 ## [0.6.2] - 2026-08-03
 
 ### Fixed
+
 - Save JSON/CSV exports, folder exports, and encrypted backups to the user-selected path
 - Read JSON/CSV imports and encrypted backups reliably from native Open dialogs
 - Flush completed file writes before reporting a successful save
@@ -291,24 +366,28 @@ Profiles created with v1.0.1 may have metadata but no recoverable vault password
 ## [0.6.1] - 2026-08-03
 
 ### Added
+
 - New SessionDock logo across the application header, browser favicon, executable, and installer
 - Folder context action to create a nested folder with the clicked folder preselected as its parent
 
 ## [0.6.0] - 2026-08-03
 
 ### Added
+
 - Native Windows Open/Save dialogs for JSON and CSV session import/export
 - Password-encrypted AES-GCM backup creation and restore
 - Folder right-click menu for scoped session creation, rename, subtree export, and deletion
 - Permanent Unfiled session area with pointer-based drag and drop
 
 ### Fixed
+
 - Persist sessions and folders to SQLite and restore them at application startup
 - Persist session edits, deletion, folder assignment, folder moves, and folder deletion
 - Show unfiled sessions in the Sidebar and open saved sessions from the folder tree
 - Update the About version from synchronized Tauri package metadata
 
 ### Added
+
 - Initial project scaffold with Tauri 2 + React + TypeScript
 - SQLite database with FTS5 full-text search
 - Session CRUD operations

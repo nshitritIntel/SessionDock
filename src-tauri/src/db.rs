@@ -102,9 +102,37 @@ impl Database {
             )?;
         }
 
+        if current_version < 8 {
+            conn.execute_batch(include_str!("migrations/008_monitoring.sql"))?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![8],
+            )?;
+        }
+
+        if current_version < 9 {
+            conn.execute_batch(include_str!(
+                "migrations/009_monitor_baseline_snapshots.sql"
+            ))?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![9],
+            )?;
+        }
+
+        if current_version < 10 {
+            conn.execute_batch(include_str!(
+                "migrations/010_monitor_notification_dedup.sql"
+            ))?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![10],
+            )?;
+        }
+
         log::info!(
             "Database migrations complete. Version: {}",
-            std::cmp::max(current_version, 7)
+            std::cmp::max(current_version, 10)
         );
         Ok(())
     }
@@ -214,7 +242,7 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            7
+            10
         );
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM session_jump_hosts", [], |row| row
@@ -252,6 +280,18 @@ mod tests {
                 0
             ))
             .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM monitor_definitions", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM monitor_samples", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
             0
         );
         conn.execute(
@@ -302,6 +342,62 @@ mod tests {
             1
         );
         drop(reopened);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn migrates_v8_baseline_to_snapshot_that_survives_sample_retention() {
+        let path = std::env::temp_dir().join(format!(
+            "sessiondock-baseline-migration-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(include_str!("migrations/001_initial.sql"))
+            .unwrap();
+        conn.execute_batch(include_str!("migrations/008_monitoring.sql"))
+            .unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+             INSERT INTO schema_version(version) VALUES (8);
+             INSERT INTO sessions (id, name, host, protocol, authentication_method, created_at, updated_at)
+             VALUES ('session-1', 'Leaf', '192.0.2.10', 'ssh', 'agent', datetime('now'), datetime('now'));
+             INSERT INTO monitor_definitions (id, session_id, provider_id, monitor_kind, display_name, interval_seconds)
+             VALUES ('monitor-1', 'session-1', 'arista-eos', 'interfaces', 'Interfaces', 60);
+             INSERT INTO monitor_samples (id, monitor_id, observed_at, status, duration_ms, summary_json)
+             VALUES (42, 'monitor-1', '2026-01-01T00:00:00Z', 'healthy', 10, '{\"interfaceCount\":2}');
+             INSERT INTO monitor_baselines (id, monitor_id, name, sample_id, captured_at)
+             VALUES ('baseline-1', 'monitor-1', 'Known good', 42, '2026-01-01T00:01:00Z');",
+        )
+        .unwrap();
+        drop(conn);
+
+        let db = Database::new(&path).unwrap();
+        let conn = db.conn();
+        conn.execute("DELETE FROM monitor_samples WHERE id = 42", [])
+            .unwrap();
+        let baseline: (String, String) = conn
+            .query_row(
+                "SELECT snapshot_json, source_observed_at FROM monitor_baselines WHERE id = 'baseline-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            baseline,
+            (
+                "{\"interfaceCount\":2}".into(),
+                "2026-01-01T00:00:00Z".into()
+            )
+        );
+        assert_eq!(
+            conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
+                .get::<_, i64>(0))
+                .unwrap(),
+            10
+        );
+
+        drop(conn);
+        drop(db);
         std::fs::remove_file(path).unwrap();
     }
 }

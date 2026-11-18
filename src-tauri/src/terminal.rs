@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 
+const MAX_CONSECUTIVE_KEEPALIVE_FAILURES: u8 = 3;
+
 use crate::commands::known_hosts::HostKeyVerification;
 use crate::commands::terminal_logging::TerminalLogManager;
 use crate::db::Database;
@@ -82,6 +84,11 @@ struct JumpBridge {
     address: SocketAddr,
     shutdown: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
+}
+
+pub(crate) struct StandaloneSshConnection {
+    pub(crate) session: Session,
+    _jump_bridges: Vec<JumpBridge>,
 }
 
 impl Drop for JumpBridge {
@@ -371,6 +378,7 @@ pub async fn connect_ssh(
     tokio::spawn(async move {
         let mut buf = [0u8; 4096];
         let mut next_keepalive = keepalive_deadline(keepalive_secs);
+        let mut keepalive_failures = 0_u8;
         let close_reason = loop {
             tokio::time::sleep(Duration::from_millis(20)).await;
 
@@ -381,6 +389,7 @@ pub async fn connect_ssh(
                 if next_keepalive.is_some_and(|deadline| Instant::now() >= deadline) {
                     match c.session.keepalive_send() {
                         Ok(seconds) => {
+                            keepalive_failures = 0;
                             next_keepalive =
                                 Some(Instant::now() + Duration::from_secs(seconds.max(1) as u64));
                         }
@@ -388,9 +397,13 @@ pub async fn connect_ssh(
                             next_keepalive = Some(Instant::now() + Duration::from_secs(1));
                         }
                         Err(error) => {
-                            log::warn!(
-                                "SSH keepalive send failed; connection remains active: {error}"
-                            );
+                            let unhealthy = record_keepalive_failure(&mut keepalive_failures);
+                            log::warn!("SSH keepalive send failed ({keepalive_failures}/{MAX_CONSECUTIVE_KEEPALIVE_FAILURES}): {error}");
+                            if unhealthy {
+                                break format!(
+                                    "SSH connection became unhealthy after {keepalive_failures} consecutive keepalive failures: {error}"
+                                );
+                            }
                             next_keepalive = keepalive_retry_deadline(keepalive_secs);
                         }
                     }
@@ -511,6 +524,34 @@ fn open_ssh_route(
     authenticate_ssh(&mut target_session, target_username, target_authentication)?;
     bridges.push(bridge);
     Ok((target_session, bridges))
+}
+
+pub(crate) async fn open_trusted_ssh_connection(
+    db: &Database,
+    host: String,
+    port: u16,
+    username: String,
+    authentication: SshAuthentication,
+    jump_hosts: Vec<JumpHostConfig>,
+) -> Result<StandaloneSshConnection, AppError> {
+    let trusted_host_keys = load_trusted_host_keys(db, &host, port, &jump_hosts)?;
+    let (session, jump_bridges) = tokio::task::spawn_blocking(move || {
+        open_ssh_route(
+            &host,
+            port,
+            &username,
+            authentication,
+            jump_hosts,
+            &trusted_host_keys,
+        )
+    })
+    .await
+    .map_err(|error| AppError::Ssh(format!("SSH task failed: {error}")))??;
+    session.set_blocking(false);
+    Ok(StandaloneSshConnection {
+        session,
+        _jump_bridges: jump_bridges,
+    })
 }
 
 pub async fn inspect_ssh_route(
@@ -880,7 +921,16 @@ fn keepalive_deadline(keepalive_secs: u32) -> Option<Instant> {
 }
 
 fn keepalive_retry_deadline(keepalive_secs: u32) -> Option<Instant> {
-    (keepalive_secs > 0).then(|| Instant::now() + Duration::from_secs(keepalive_secs.max(5) as u64))
+    (keepalive_secs > 0).then(|| Instant::now() + keepalive_retry_delay(keepalive_secs))
+}
+
+fn keepalive_retry_delay(keepalive_secs: u32) -> Duration {
+    Duration::from_secs(keepalive_secs.clamp(1, 5) as u64)
+}
+
+fn record_keepalive_failure(failures: &mut u8) -> bool {
+    *failures = failures.saturating_add(1);
+    *failures >= MAX_CONSECUTIVE_KEEPALIVE_FAILURES
 }
 
 fn remote_close_reason(exit_status: Option<i32>) -> String {
@@ -903,9 +953,11 @@ fn is_nonfatal_io_error(error: &std::io::Error) -> bool {
 mod tests {
     use super::{
         ecdsa_public_key_path, is_nonfatal_io_error, keepalive_deadline, keepalive_retry_deadline,
-        remote_close_reason, validate_private_key_path,
+        keepalive_retry_delay, record_keepalive_failure, remote_close_reason,
+        validate_private_key_path,
     };
     use std::path::PathBuf;
+    use std::time::Duration;
 
     #[test]
     fn keepalive_zero_disables_scheduling() {
@@ -913,6 +965,18 @@ mod tests {
         assert!(keepalive_deadline(60).is_some());
         assert!(keepalive_retry_deadline(0).is_none());
         assert!(keepalive_retry_deadline(60).is_some());
+        assert_eq!(keepalive_retry_delay(1), Duration::from_secs(1));
+        assert_eq!(keepalive_retry_delay(60), Duration::from_secs(5));
+    }
+
+    #[test]
+    fn marks_connection_unhealthy_after_three_keepalive_failures() {
+        let mut failures = 0;
+        assert!(!record_keepalive_failure(&mut failures));
+        assert!(!record_keepalive_failure(&mut failures));
+        assert!(record_keepalive_failure(&mut failures));
+        failures = 0;
+        assert!(!record_keepalive_failure(&mut failures));
     }
 
     #[test]

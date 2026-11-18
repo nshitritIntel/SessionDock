@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
-import { relaunch } from "@tauri-apps/plugin-process";
 import { Download, X, RefreshCw, AlertTriangle } from "lucide-react";
 import { useAppStore } from "../stores/appStore";
 import { useAppVersion } from "../hooks/useAppVersion";
+import { installUpdate } from "../utils/installUpdate";
 
 export function UpdateNotification() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
@@ -73,7 +73,7 @@ export function UpdateNotification() {
       let downloadedBytes = 0;
       let totalBytes = 0;
 
-      await update.downloadAndInstall((event) => {
+      await installUpdate(update, (event) => {
         if (event.event === "Started") {
           totalBytes = event.data.contentLength ?? 0;
         } else if (event.event === "Progress") {
@@ -83,8 +83,6 @@ export function UpdateNotification() {
           setProgress(100);
         }
       });
-
-      await relaunch();
     } catch (e) {
       setError(String(e));
       setDownloading(false);

@@ -423,6 +423,8 @@ fn replace_jump_host_chain(
         rusqlite::params![session_id],
     )?;
     for (position, jump_host_id) in jump_host_ids.iter().enumerate() {
+        let position = i64::try_from(position)
+            .map_err(|_| AppError::Validation("Jump-host position is out of range".into()))?;
         conn.execute(
             "INSERT INTO session_jump_hosts (session_id, jump_session_id, position) VALUES (?1, ?2, ?3)",
             rusqlite::params![session_id, jump_host_id, position],

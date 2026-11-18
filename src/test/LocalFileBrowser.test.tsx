@@ -35,7 +35,32 @@ describe("LocalFileBrowser", () => {
     expect(onSelectionChange).toHaveBeenLastCalledWith({
       directoryPath: "C:\\",
       entry: { name: "session.log", path: "C:\\session.log", kind: "file", size: 42 },
+      entries: [{ name: "session.log", path: "C:\\session.log", kind: "file", size: 42 }],
     });
+  });
+
+  it("reports a bounded Ctrl-selected file and folder set", async () => {
+    mocks.invoke.mockResolvedValue({
+      path: "C:\\configs",
+      entries: [
+        { name: "archive", path: "C:\\configs\\archive", kind: "directory" },
+        { name: "switch.cfg", path: "C:\\configs\\switch.cfg", kind: "file", size: 12 },
+      ],
+    });
+    const onSelectionChange = vi.fn();
+    render(<LocalFileBrowser onSelectionChange={onSelectionChange} />);
+
+    fireEvent.click(await screen.findByText("archive"));
+    fireEvent.click(screen.getByText("switch.cfg"), { ctrlKey: true });
+
+    expect(onSelectionChange).toHaveBeenLastCalledWith(expect.objectContaining({
+      directoryPath: "C:\\configs",
+      entry: undefined,
+      entries: expect.arrayContaining([
+        expect.objectContaining({ name: "archive" }),
+        expect.objectContaining({ name: "switch.cfg" }),
+      ]),
+    }));
   });
 
   it("creates, renames, and deletes through narrow local commands", async () => {

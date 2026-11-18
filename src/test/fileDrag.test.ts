@@ -34,6 +34,25 @@ describe("file drag payloads", () => {
     expect(hasFileDragType(dataTransfer, LOCAL_FILE_DRAG_TYPE)).toBe(false);
   });
 
+  it("round-trips a bounded multi-entry payload", () => {
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      types: [LOCAL_FILE_DRAG_TYPE],
+      effectAllowed: "none",
+      setData: (type: string, value: string) => values.set(type, value),
+      getData: (type: string) => values.get(type) ?? "",
+    } as unknown as DataTransfer;
+    const items = [
+      { name: "configs", path: "C:\\configs", kind: "directory" as const },
+      { name: "notes.txt", path: "C:\\notes.txt", kind: "file" as const },
+    ];
+
+    setFileDragPayload(dataTransfer, LOCAL_FILE_DRAG_TYPE, { ...items[0], items });
+
+    expect(readFileDragPayload(dataTransfer, LOCAL_FILE_DRAG_TYPE)?.items).toEqual(items);
+    expect(values.get("text/plain")).not.toContain("C:\\configs");
+  });
+
   it("uses a path-free standard format when WebView2 rejects custom drag data", () => {
     const values = new Map<string, string>();
     const dataTransfer = {

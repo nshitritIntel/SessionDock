@@ -15,7 +15,7 @@ vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-describe("SessionForm reconnect behavior", () => {
+describe("SessionForm SSH behavior", () => {
   beforeEach(() => {
     mocks.sessions = [];
     mocks.credentials = [];
@@ -37,5 +37,26 @@ describe("SessionForm reconnect behavior", () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
       reconnect_mode: "automatic",
     }));
+  });
+
+  it("uses the selected credential username until manual credentials are selected", () => {
+    mocks.credentials = [{
+      id: "credential-1",
+      name: "Network operations",
+      username: "netadmin",
+      authentication_method: "password",
+    }];
+    render(<SessionForm onSubmit={vi.fn()} onCancel={vi.fn()} folders={[]} />);
+
+    const username = screen.getByPlaceholderText("admin");
+    const credentialSelect = screen.getByText("sshAuth.credentialProfile (sshAuth.optional)").parentElement!.querySelector("select")!;
+    fireEvent.change(username, { target: { value: "stale-user" } });
+    fireEvent.change(credentialSelect, { target: { value: "credential-1" } });
+
+    expect(username).toHaveValue("netadmin");
+    expect(username).toBeDisabled();
+
+    fireEvent.change(credentialSelect, { target: { value: "" } });
+    expect(username).not.toBeDisabled();
   });
 });

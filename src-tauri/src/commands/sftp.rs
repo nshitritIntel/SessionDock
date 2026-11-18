@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use ssh2::{FileStat, RenameFlags, Sftp};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::Mutex;
@@ -21,6 +21,41 @@ const SFTP_TIMEOUT: Duration = Duration::from_secs(15);
 const TRANSFER_RUNNING: u8 = 0;
 const TRANSFER_PAUSED: u8 = 1;
 const TRANSFER_CANCELLED: u8 = 2;
+const MAX_TRANSFER_TREE_ENTRIES: usize = 10_000;
+const MAX_TRANSFER_TREE_DEPTH: usize = 64;
+
+struct LocalTreeEntry {
+    path: PathBuf,
+    relative_path: PathBuf,
+    is_directory: bool,
+    size: u64,
+}
+
+struct PreparedUpload {
+    source: PathBuf,
+    remote_path: String,
+    entries: Vec<LocalTreeEntry>,
+}
+
+struct RemoteTreeEntry {
+    path: String,
+    relative_path: PathBuf,
+    is_directory: bool,
+    size: u64,
+}
+
+struct PreparedDownload {
+    remote_path: String,
+    local_path: PathBuf,
+    entries: Vec<RemoteTreeEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SftpBatchItem {
+    local_path: String,
+    remote_path: String,
+}
 
 #[derive(Clone)]
 pub struct SftpTransferManager {
@@ -184,6 +219,63 @@ pub(crate) fn validate_local_upload(path: &str) -> Result<std::path::PathBuf, Ap
         ));
     }
     Ok(path)
+}
+
+fn collect_local_tree(path: &str) -> Result<Vec<LocalTreeEntry>, AppError> {
+    if path.is_empty() || path.contains('\0') {
+        return Err(AppError::Validation(
+            "Invalid local transfer path".to_string(),
+        ));
+    }
+    let root = std::fs::canonicalize(path)?;
+    let metadata = std::fs::symlink_metadata(&root)?;
+    if metadata.file_type().is_symlink() || (!metadata.is_file() && !metadata.is_dir()) {
+        return Err(AppError::Validation(
+            "Transfer sources must be regular files or directories; symbolic links are not followed"
+                .to_string(),
+        ));
+    }
+
+    let mut entries = Vec::new();
+    let mut pending = VecDeque::from([(root.clone(), PathBuf::new())]);
+    while let Some((current, relative_path)) = pending.pop_front() {
+        if entries.len() >= MAX_TRANSFER_TREE_ENTRIES {
+            return Err(AppError::Validation(format!(
+                "Transfer source exceeds the {MAX_TRANSFER_TREE_ENTRIES} entry limit"
+            )));
+        }
+        if relative_path.components().count() > MAX_TRANSFER_TREE_DEPTH {
+            return Err(AppError::Validation(format!(
+                "Transfer source exceeds the {MAX_TRANSFER_TREE_DEPTH} level depth limit"
+            )));
+        }
+        let metadata = std::fs::symlink_metadata(&current)?;
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::Validation(
+                "Symbolic links are not followed during recursive transfers".to_string(),
+            ));
+        }
+        let is_directory = metadata.is_dir();
+        if !is_directory && !metadata.is_file() {
+            return Err(AppError::Validation(
+                "Transfer sources must contain only regular files and directories".to_string(),
+            ));
+        }
+        entries.push(LocalTreeEntry {
+            path: current.clone(),
+            relative_path: relative_path.clone(),
+            is_directory,
+            size: if is_directory { 0 } else { metadata.len() },
+        });
+        if is_directory {
+            let mut children = std::fs::read_dir(&current)?.collect::<Result<Vec<_>, _>>()?;
+            children.sort_by_key(|entry| entry.file_name());
+            for child in children {
+                pending.push_back((child.path(), relative_path.join(child.file_name())));
+            }
+        }
+    }
+    Ok(entries)
 }
 
 pub(crate) fn validate_local_download(path: &str) -> Result<std::path::PathBuf, AppError> {
@@ -399,14 +491,139 @@ async fn require_remote_destination(
     }
 }
 
+async fn remote_exists(sftp: &Sftp, path: &str) -> Result<bool, AppError> {
+    let deadline = Instant::now() + SFTP_TIMEOUT;
+    loop {
+        match sftp.stat(Path::new(path)) {
+            Ok(_) => return Ok(true),
+            Err(error) if error.code() == ssh2::ErrorCode::SFTP(2) => return Ok(false),
+            Err(error)
+                if error.code() == ssh2::ErrorCode::Session(-37) && Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(AppError::Ssh(format!("SFTP operation failed: {error}"))),
+        }
+    }
+}
+
+fn remote_tree_path(root: &str, relative_path: &Path) -> Result<String, AppError> {
+    let mut result = root.to_string();
+    for component in relative_path.components() {
+        let name = component.as_os_str().to_str().ok_or_else(|| {
+            AppError::Validation("Transfer source contains a non-Unicode file name".to_string())
+        })?;
+        result = join_remote_path(&result, name);
+    }
+    normalize_remote_path(&result)
+}
+
+async fn remove_remote_tree(sftp: &Sftp, root: &str) -> Result<(), AppError> {
+    if !remote_exists(sftp, root).await? {
+        return Ok(());
+    }
+    let mut pending = vec![(root.to_string(), false)];
+    let mut visited = 0_usize;
+    while let Some((path, expanded)) = pending.pop() {
+        visited += 1;
+        if visited > MAX_TRANSFER_TREE_ENTRIES * 2 {
+            return Err(AppError::Validation(
+                "Remote cleanup exceeded the transfer entry limit".to_string(),
+            ));
+        }
+        let stat = retry_sftp(|| sftp.lstat(Path::new(&path))).await?;
+        if entry_kind(&stat) != "directory" {
+            retry_sftp(|| sftp.unlink(Path::new(&path))).await?;
+            continue;
+        }
+        if expanded {
+            retry_sftp(|| sftp.rmdir(Path::new(&path))).await?;
+            continue;
+        }
+        pending.push((path.clone(), true));
+        for (child, child_stat) in retry_sftp(|| sftp.readdir(Path::new(&path))).await? {
+            let name = remote_name(&child)?;
+            let child_path = join_remote_path(&path, &name);
+            if entry_kind(&child_stat) == "symlink" {
+                retry_sftp(|| sftp.unlink(Path::new(&child_path))).await?;
+            } else {
+                pending.push((child_path, false));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn collect_remote_tree(sftp: &Sftp, root: &str) -> Result<Vec<RemoteTreeEntry>, AppError> {
+    let root = normalize_remote_path(root)?;
+    let mut entries = Vec::new();
+    let mut pending = VecDeque::from([(root, PathBuf::new())]);
+    while let Some((path, relative_path)) = pending.pop_front() {
+        if entries.len() >= MAX_TRANSFER_TREE_ENTRIES {
+            return Err(AppError::Validation(format!(
+                "Remote transfer source exceeds the {MAX_TRANSFER_TREE_ENTRIES} entry limit"
+            )));
+        }
+        if relative_path.components().count() > MAX_TRANSFER_TREE_DEPTH {
+            return Err(AppError::Validation(format!(
+                "Remote transfer source exceeds the {MAX_TRANSFER_TREE_DEPTH} level depth limit"
+            )));
+        }
+        let stat = retry_sftp(|| sftp.lstat(Path::new(&path))).await?;
+        let kind = entry_kind(&stat);
+        if kind == "symlink" {
+            return Err(AppError::Validation(
+                "Symbolic links are not followed during recursive transfers".to_string(),
+            ));
+        }
+        let is_directory = kind == "directory";
+        entries.push(RemoteTreeEntry {
+            path: path.clone(),
+            relative_path: relative_path.clone(),
+            is_directory,
+            size: if is_directory {
+                0
+            } else {
+                stat.size.unwrap_or(0)
+            },
+        });
+        if is_directory {
+            let mut children = retry_sftp(|| sftp.readdir(Path::new(&path))).await?;
+            children.sort_by(|(left, _), (right, _)| left.cmp(right));
+            for (child, child_stat) in children {
+                let name = remote_name(&child)?;
+                if entry_kind(&child_stat) == "symlink" {
+                    return Err(AppError::Validation(
+                        "Symbolic links are not followed during recursive transfers".to_string(),
+                    ));
+                }
+                pending.push_back((join_remote_path(&path, &name), relative_path.join(name)));
+            }
+        }
+    }
+    Ok(entries)
+}
+
+fn remove_local_tree(path: &Path) -> Result<(), AppError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if path.is_dir() {
+        std::fs::remove_dir_all(path)?;
+    } else {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 async fn upload_file(
     progress: &mut TransferProgress<'_>,
-    sftp: Sftp,
+    sftp: &Sftp,
     local_path: &Path,
     remote_path: &str,
     overwrite: bool,
 ) -> Result<(), AppError> {
-    require_remote_destination(&sftp, remote_path, overwrite).await?;
+    require_remote_destination(sftp, remote_path, overwrite).await?;
     let staged_path = format!("{remote_path}.sessiondock-{}.part", progress.event.id);
     let mut local_file = std::fs::File::open(local_path)?;
     let mut remote_file = retry_sftp(|| sftp.create(Path::new(&staged_path))).await?;
@@ -453,9 +670,100 @@ async fn upload_file(
     transfer_result
 }
 
+async fn upload_tree(
+    progress: &mut TransferProgress<'_>,
+    sftp: &Sftp,
+    upload: &PreparedUpload,
+    overwrite: bool,
+) -> Result<(), AppError> {
+    if upload.entries.len() == 1 && !upload.entries[0].is_directory {
+        return upload_file(
+            progress,
+            sftp,
+            &upload.entries[0].path,
+            &upload.remote_path,
+            overwrite,
+        )
+        .await;
+    }
+
+    require_remote_destination(sftp, &upload.remote_path, overwrite).await?;
+    let staged_path = format!(
+        "{}.sessiondock-{}.part",
+        upload.remote_path, progress.event.id
+    );
+    let backup_path = format!(
+        "{}.sessiondock-{}.backup",
+        upload.remote_path, progress.event.id
+    );
+    if remote_exists(sftp, &staged_path).await? {
+        remove_remote_tree(sftp, &staged_path).await?;
+    }
+    retry_sftp(|| sftp.mkdir(Path::new(&staged_path), 0o755)).await?;
+
+    let transfer_result = async {
+        for entry in upload.entries.iter().skip(1) {
+            wait_for_transfer(progress.control).await?;
+            let destination = remote_tree_path(&staged_path, &entry.relative_path)?;
+            if entry.is_directory {
+                retry_sftp(|| sftp.mkdir(Path::new(&destination), 0o755)).await?;
+            } else {
+                upload_file(progress, sftp, &entry.path, &destination, false).await?;
+            }
+        }
+
+        let destination_exists = remote_exists(sftp, &upload.remote_path).await?;
+        if destination_exists {
+            if !overwrite {
+                return Err(AppError::Validation(
+                    "Remote destination already exists".to_string(),
+                ));
+            }
+            retry_sftp(|| {
+                sftp.rename(
+                    Path::new(&upload.remote_path),
+                    Path::new(&backup_path),
+                    Some(RenameFlags::ATOMIC | RenameFlags::NATIVE),
+                )
+            })
+            .await?;
+        }
+        if let Err(error) = retry_sftp(|| {
+            sftp.rename(
+                Path::new(&staged_path),
+                Path::new(&upload.remote_path),
+                Some(RenameFlags::ATOMIC | RenameFlags::NATIVE),
+            )
+        })
+        .await
+        {
+            if destination_exists {
+                let _ = sftp.rename(
+                    Path::new(&backup_path),
+                    Path::new(&upload.remote_path),
+                    Some(RenameFlags::ATOMIC | RenameFlags::NATIVE),
+                );
+            }
+            return Err(error);
+        }
+        if destination_exists {
+            if let Err(error) = remove_remote_tree(sftp, &backup_path).await {
+                log::warn!("Could not remove completed SFTP upload backup {backup_path}: {error}");
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    if transfer_result.is_err() {
+        let _ = remove_remote_tree(sftp, &staged_path).await;
+    }
+    transfer_result
+}
+
 async fn download_file(
     progress: &mut TransferProgress<'_>,
-    sftp: Sftp,
+    sftp: &Sftp,
     remote_path: &str,
     local_path: &Path,
     overwrite: bool,
@@ -510,6 +818,78 @@ async fn download_file(
     transfer_result
 }
 
+async fn download_tree(
+    progress: &mut TransferProgress<'_>,
+    sftp: &Sftp,
+    download: &PreparedDownload,
+    overwrite: bool,
+) -> Result<(), AppError> {
+    if download.entries.len() == 1 && !download.entries[0].is_directory {
+        return download_file(
+            progress,
+            sftp,
+            &download.remote_path,
+            &download.local_path,
+            overwrite,
+        )
+        .await;
+    }
+    if download.local_path.exists() && !overwrite {
+        return Err(AppError::Validation(
+            "Local destination already exists".to_string(),
+        ));
+    }
+    let file_name = transfer_name(&download.local_path);
+    let staged_path = download.local_path.with_file_name(format!(
+        ".{file_name}.sessiondock-{}.part",
+        progress.event.id
+    ));
+    let backup_path = download.local_path.with_file_name(format!(
+        ".{file_name}.sessiondock-{}.backup",
+        progress.event.id
+    ));
+    remove_local_tree(&staged_path)?;
+    std::fs::create_dir(&staged_path)?;
+
+    let transfer_result = async {
+        for entry in download.entries.iter().skip(1) {
+            wait_for_transfer(progress.control).await?;
+            let destination = staged_path.join(&entry.relative_path);
+            if entry.is_directory {
+                std::fs::create_dir(&destination)?;
+            } else {
+                download_file(progress, sftp, &entry.path, &destination, false).await?;
+            }
+        }
+        let destination_exists = download.local_path.exists();
+        if destination_exists {
+            if let Err(error) = remove_local_tree(&backup_path) {
+                log::warn!(
+                    "Could not remove completed SFTP download backup {}: {error}",
+                    backup_path.display()
+                );
+            }
+            std::fs::rename(&download.local_path, &backup_path)?;
+        }
+        if let Err(error) = std::fs::rename(&staged_path, &download.local_path) {
+            if destination_exists {
+                let _ = std::fs::rename(&backup_path, &download.local_path);
+            }
+            return Err(AppError::Io(error));
+        }
+        if destination_exists {
+            remove_local_tree(&backup_path)?;
+        }
+        Ok(())
+    }
+    .await;
+
+    if transfer_result.is_err() {
+        let _ = remove_local_tree(&staged_path);
+    }
+    transfer_result
+}
+
 #[tauri::command]
 pub async fn start_sftp_upload(
     app: AppHandle,
@@ -557,7 +937,7 @@ pub async fn start_sftp_upload(
             event: &mut event,
             control: &control,
         };
-        match upload_file(&mut progress, sftp, &local_path, &remote_path, overwrite).await {
+        match upload_file(&mut progress, &sftp, &local_path, &remote_path, overwrite).await {
             Ok(()) => event.status = "completed",
             Err(_) if control.load(Ordering::Acquire) == TRANSFER_CANCELLED => {
                 event.status = "cancelled";
@@ -570,6 +950,102 @@ pub async fn start_sftp_upload(
         }
         emit_transfer(&app, &tab_id, &event);
         manager.jobs.lock().await.remove(&task_id);
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn start_sftp_upload_batch(
+    app: AppHandle,
+    ssh_manager: State<'_, NativeSshManager>,
+    transfer_manager: State<'_, SftpTransferManager>,
+    tab_id: String,
+    items: Vec<SftpBatchItem>,
+    overwrite: bool,
+) -> Result<String, AppError> {
+    if items.is_empty() || items.len() > 256 {
+        return Err(AppError::Validation(
+            "Select between 1 and 256 transfer sources".to_string(),
+        ));
+    }
+    let mut uploads = Vec::with_capacity(items.len());
+    let mut total = 0_u64;
+    let mut entry_count = 0_usize;
+    for item in items {
+        let remote_path = normalize_remote_path(&item.remote_path)?;
+        if remote_path == "/"
+            || uploads
+                .iter()
+                .any(|upload: &PreparedUpload| upload.remote_path == remote_path)
+        {
+            return Err(AppError::Validation(
+                "Transfer destinations must be unique non-root paths".to_string(),
+            ));
+        }
+        let entries = collect_local_tree(&item.local_path)?;
+        entry_count = entry_count.checked_add(entries.len()).ok_or_else(|| {
+            AppError::Validation("Transfer entry count exceeds the supported range".to_string())
+        })?;
+        if entry_count > MAX_TRANSFER_TREE_ENTRIES {
+            return Err(AppError::Validation(format!(
+                "Transfer batch exceeds the {MAX_TRANSFER_TREE_ENTRIES} entry limit"
+            )));
+        }
+        total = total
+            .checked_add(entries.iter().map(|entry| entry.size).sum::<u64>())
+            .ok_or_else(|| {
+                AppError::Validation("Transfer size exceeds the supported range".to_string())
+            })?;
+        uploads.push(PreparedUpload {
+            source: std::fs::canonicalize(&item.local_path)?,
+            remote_path,
+            entries,
+        });
+    }
+    let sftp = open_sftp(&ssh_manager, &tab_id).await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    let control = transfer_manager.register(&id, &tab_id).await;
+    let manager = transfer_manager.inner().clone();
+    let task_id = id.clone();
+    tokio::spawn(async move {
+        let name = if uploads.len() == 1 {
+            transfer_name(&uploads[0].source)
+        } else {
+            format!("{} items", uploads.len())
+        };
+        let mut event = SftpTransferEvent {
+            id: task_id.clone(),
+            name,
+            direction: "upload",
+            transferred: 0,
+            total,
+            status: "running",
+            error: None,
+        };
+        emit_transfer(&app, &tab_id, &event);
+        let mut progress = TransferProgress {
+            app: &app,
+            tab_id: &tab_id,
+            event: &mut event,
+            control: &control,
+        };
+        let mut result = Ok(());
+        for upload in &uploads {
+            if let Err(error) = upload_tree(&mut progress, &sftp, upload, overwrite).await {
+                result = Err(error);
+                break;
+            }
+        }
+        match result {
+            Ok(()) => event.status = "completed",
+            Err(_) if transfer_cancelled(&control) => event.status = "cancelled",
+            Err(error) => {
+                event.status = "failed";
+                event.error = Some(error.to_string());
+            }
+        }
+        emit_transfer(&app, &tab_id, &event);
+        manager.finish(&task_id).await;
     });
     Ok(id)
 }
@@ -620,7 +1096,7 @@ pub async fn start_sftp_download(
             event: &mut event,
             control: &control,
         };
-        match download_file(&mut progress, sftp, &remote_path, &local_path, overwrite).await {
+        match download_file(&mut progress, &sftp, &remote_path, &local_path, overwrite).await {
             Ok(()) => event.status = "completed",
             Err(_) if control.load(Ordering::Acquire) == TRANSFER_CANCELLED => {
                 event.status = "cancelled";
@@ -633,6 +1109,107 @@ pub async fn start_sftp_download(
         }
         emit_transfer(&app, &tab_id, &event);
         manager.jobs.lock().await.remove(&task_id);
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+pub async fn start_sftp_download_batch(
+    app: AppHandle,
+    ssh_manager: State<'_, NativeSshManager>,
+    transfer_manager: State<'_, SftpTransferManager>,
+    tab_id: String,
+    items: Vec<SftpBatchItem>,
+    overwrite: bool,
+) -> Result<String, AppError> {
+    if items.is_empty() || items.len() > 256 {
+        return Err(AppError::Validation(
+            "Select between 1 and 256 transfer sources".to_string(),
+        ));
+    }
+    let sftp = open_sftp(&ssh_manager, &tab_id).await?;
+    let mut downloads = Vec::with_capacity(items.len());
+    let mut total = 0_u64;
+    let mut entry_count = 0_usize;
+    for item in items {
+        let remote_path = normalize_remote_path(&item.remote_path)?;
+        if remote_path == "/" {
+            return Err(AppError::Validation(
+                "Cannot download the remote root".to_string(),
+            ));
+        }
+        let local_path = validate_local_download(&item.local_path)?;
+        if downloads
+            .iter()
+            .any(|download: &PreparedDownload| download.local_path == local_path)
+        {
+            return Err(AppError::Validation(
+                "Transfer destinations must be unique".to_string(),
+            ));
+        }
+        let entries = collect_remote_tree(&sftp, &remote_path).await?;
+        entry_count = entry_count.checked_add(entries.len()).ok_or_else(|| {
+            AppError::Validation("Transfer entry count exceeds the supported range".to_string())
+        })?;
+        if entry_count > MAX_TRANSFER_TREE_ENTRIES {
+            return Err(AppError::Validation(format!(
+                "Transfer batch exceeds the {MAX_TRANSFER_TREE_ENTRIES} entry limit"
+            )));
+        }
+        total = total
+            .checked_add(entries.iter().map(|entry| entry.size).sum::<u64>())
+            .ok_or_else(|| {
+                AppError::Validation("Transfer size exceeds the supported range".to_string())
+            })?;
+        downloads.push(PreparedDownload {
+            remote_path,
+            local_path,
+            entries,
+        });
+    }
+    let id = uuid::Uuid::new_v4().to_string();
+    let control = transfer_manager.register(&id, &tab_id).await;
+    let manager = transfer_manager.inner().clone();
+    let task_id = id.clone();
+    tokio::spawn(async move {
+        let name = if downloads.len() == 1 {
+            transfer_name(&downloads[0].local_path)
+        } else {
+            format!("{} items", downloads.len())
+        };
+        let mut event = SftpTransferEvent {
+            id: task_id.clone(),
+            name,
+            direction: "download",
+            transferred: 0,
+            total,
+            status: "running",
+            error: None,
+        };
+        emit_transfer(&app, &tab_id, &event);
+        let mut progress = TransferProgress {
+            app: &app,
+            tab_id: &tab_id,
+            event: &mut event,
+            control: &control,
+        };
+        let mut result = Ok(());
+        for download in &downloads {
+            if let Err(error) = download_tree(&mut progress, &sftp, download, overwrite).await {
+                result = Err(error);
+                break;
+            }
+        }
+        match result {
+            Ok(()) => event.status = "completed",
+            Err(_) if transfer_cancelled(&control) => event.status = "cancelled",
+            Err(error) => {
+                event.status = "failed";
+                event.error = Some(error.to_string());
+            }
+        }
+        emit_transfer(&app, &tab_id, &event);
+        manager.finish(&task_id).await;
     });
     Ok(id)
 }
@@ -685,9 +1262,9 @@ pub async fn cancel_sftp_transfer(
 #[cfg(test)]
 mod tests {
     use super::{
-        entry_kind, join_remote_path, normalize_remote_path, remote_name, set_transfer_state,
-        validate_local_download, validate_local_upload, SftpTransferManager, TransferJob,
-        TRANSFER_CANCELLED, TRANSFER_PAUSED, TRANSFER_RUNNING,
+        collect_local_tree, entry_kind, join_remote_path, normalize_remote_path, remote_name,
+        set_transfer_state, validate_local_download, validate_local_upload, SftpTransferManager,
+        TransferJob, TRANSFER_CANCELLED, TRANSFER_PAUSED, TRANSFER_RUNNING,
     };
     use ssh2::FileStat;
     use std::path::Path;
@@ -765,6 +1342,25 @@ mod tests {
 
         std::fs::remove_file(upload).unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn enumerates_local_transfer_trees_without_following_symlinks() {
+        let root =
+            std::env::temp_dir().join(format!("sessiondock-sftp-tree-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("configs/nested")).unwrap();
+        std::fs::write(root.join("root.txt"), b"root").unwrap();
+        std::fs::write(root.join("configs/nested/leaf.txt"), b"leaf").unwrap();
+
+        let entries = collect_local_tree(root.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 5);
+        assert_eq!(entries.iter().filter(|entry| entry.is_directory).count(), 3);
+        assert_eq!(entries.iter().map(|entry| entry.size).sum::<u64>(), 8);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.relative_path == Path::new("configs/nested/leaf.txt")));
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

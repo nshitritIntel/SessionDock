@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ArrowDownToLine,
@@ -31,7 +31,7 @@ import {
   type SftpEntry,
   type SftpSortKey,
 } from "../../utils/sftp";
-import { clearFileDragPayload, hasFileDragType, LOCAL_FILE_DRAG_TYPE, readFileDragPayload, REMOTE_FILE_DRAG_TYPE, setFileDragPayload, type FileDragPayload } from "../../utils/fileDrag";
+import { clearFileDragPayload, hasFileDragType, LOCAL_FILE_DRAG_TYPE, readFileDragPayload, REMOTE_FILE_DRAG_TYPE, setFileDragPayload, type FileDragItem, type FileDragPayload } from "../../utils/fileDrag";
 import { LocalFileBrowser, type LocalFileSelection } from "./LocalFileBrowser";
 
 interface SftpPanelProps {
@@ -66,7 +66,7 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
   const [pathInput, setPathInput] = useState("/");
   const [entries, setEntries] = useState<SftpEntry[]>([]);
   const [sortKey, setSortKey] = useState<SftpSortKey>("name");
-  const [selectedPath, setSelectedPath] = useState<string>();
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [editAction, setEditAction] = useState<EditAction>();
@@ -92,7 +92,7 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
       setEntries(result);
       setPath(nextPath);
       setPathInput(nextPath);
-      setSelectedPath(undefined);
+      setSelectedPaths([]);
     } catch (loadError) {
       setError(String(loadError));
     } finally {
@@ -105,14 +105,18 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
   }, [loadDirectory]);
 
   const sortedEntries = useMemo(() => sortSftpEntries(entries, sortKey), [entries, sortKey]);
-  const selected = entries.find((entry) => entry.path === selectedPath);
+  const selectedEntries = entries.filter((entry) => selectedPaths.includes(entry.path));
+  const selected = selectedEntries.length === 1 ? selectedEntries[0] : undefined;
 
   const startTransfer = async (request: TransferRequest) => {
     const run = async (overwrite: boolean) => {
       const args = { ...request.args, overwrite };
       const id = await nativeInvoke<string>(request.command, args);
-      const direction = request.command.endsWith("_upload") ? "upload" : "download";
-      attachRequest(tabId, id, { ...request, args } as TransferRequest, fileName(args.localPath), direction);
+      const direction = request.command.includes("_upload") ? "upload" : "download";
+      const name = "items" in args
+        ? args.items.length === 1 ? fileName(args.items[0].localPath) : `${args.items.length} items`
+        : fileName(args.localPath);
+      attachRequest(tabId, id, { ...request, args } as TransferRequest, name, direction);
     };
 
     try {
@@ -143,9 +147,26 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
   };
 
   const upload = async () => {
-    const localPath = localSelection.entry?.kind === "file" ? localSelection.entry.path : undefined;
-    if (!localPath) return;
-    await uploadFile(localPath, transferProtocol === "scp" ? scpRemotePath : joinRemotePath(path, fileName(localPath)));
+    const selectedLocalEntries = localSelection.entries ?? (localSelection.entry ? [localSelection.entry] : []);
+    if (selectedLocalEntries.length === 0) return;
+    if (transferProtocol === "scp") {
+      if (selectedLocalEntries.length !== 1 || selectedLocalEntries[0].kind !== "file") return addToast("error", t("sftp.scpFilesOnly"));
+      await uploadFile(selectedLocalEntries[0].path, scpRemotePath);
+      return;
+    }
+    await uploadItems(selectedLocalEntries.map((entry) => ({ name: entry.name, path: entry.path, kind: entry.kind === "directory" ? "directory" : "file" })), path);
+  };
+
+  const uploadItems = async (items: FileDragItem[], destinationDirectory: string) => {
+    if (transferProtocol === "scp") {
+      if (items.length !== 1 || items[0].kind !== "file") return addToast("error", t("sftp.scpFilesOnly"));
+      await uploadFile(items[0].path, joinRemotePath(destinationDirectory, items[0].name));
+      return;
+    }
+    await startTransfer({
+      command: "start_sftp_upload_batch",
+      args: { tabId, items: items.map((item) => ({ localPath: item.path, remotePath: joinRemotePath(destinationDirectory, item.name) })), overwrite: false },
+    });
   };
 
   const downloadFile = async (remotePath: string, remoteName: string, destinationDirectory = localSelection.directoryPath) => {
@@ -158,13 +179,29 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
   };
 
   const download = async () => {
-    const remotePath = transferProtocol === "scp" ? scpRemotePath : selected?.path;
-    if (!remotePath || (transferProtocol === "sftp" && (!selected || selected.kind === "directory"))) return;
-    await downloadFile(remotePath, transferProtocol === "scp" ? fileName(remotePath) : selected!.name);
+    if (transferProtocol === "scp") {
+      if (!scpRemotePath || scpRemotePath === "/") return;
+      await downloadFile(scpRemotePath, fileName(scpRemotePath));
+      return;
+    }
+    if (!localSelection.directoryPath || selectedEntries.length === 0) return;
+    await downloadItems(selectedEntries.map((entry) => ({ name: entry.name, path: entry.path, kind: entry.kind === "directory" ? "directory" : "file" })), localSelection.directoryPath);
   };
 
   const downloadDroppedFile = (file: FileDragPayload, destinationDirectory: string) => {
-    void downloadFile(file.path, file.name, destinationDirectory);
+    void downloadItems(file.items ?? [{ name: file.name, path: file.path, kind: file.kind ?? "file" }], destinationDirectory);
+  };
+
+  const downloadItems = async (items: FileDragItem[], destinationDirectory: string) => {
+    if (transferProtocol === "scp") {
+      if (items.length !== 1 || items[0].kind !== "file") return addToast("error", t("sftp.scpFilesOnly"));
+      await downloadFile(items[0].path, items[0].name, destinationDirectory);
+      return;
+    }
+    await startTransfer({
+      command: "start_sftp_download_batch",
+      args: { tabId, items: items.map((item) => ({ remotePath: item.path, localPath: joinLocalPath(destinationDirectory, item.name) })), overwrite: false },
+    });
   };
 
   const acceptLocalFileDrag = (event: DragEvent<HTMLElement>) => {
@@ -178,7 +215,16 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
     event.preventDefault();
     const file = readFileDragPayload(event.dataTransfer, LOCAL_FILE_DRAG_TYPE);
     clearFileDragPayload();
-    if (file) void uploadFile(file.path, joinRemotePath(destinationDirectory, file.name));
+    if (file) void uploadItems(file.items ?? [{ name: file.name, path: file.path, kind: file.kind ?? "file" }], destinationDirectory);
+  };
+
+  const selectRemoteEntry = (entry: SftpEntry, event: MouseEvent) => {
+    const nextPaths = event.ctrlKey || event.metaKey
+      ? selectedPaths.includes(entry.path)
+        ? selectedPaths.filter((selectedPath) => selectedPath !== entry.path)
+        : [...selectedPaths, entry.path].slice(0, 256)
+      : [entry.path];
+    setSelectedPaths(nextPaths);
   };
 
   const submitEdit = async () => {
@@ -225,8 +271,8 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
       <div className="h-9 px-2 flex items-center gap-1 border-b border-dock-border flex-shrink-0">
         <Folder size={14} className="text-dock-accent" />
         <h2 className="text-xs font-semibold text-dock-text flex-1">{t("sftp.files")}</h2>
-        <IconButton label={t("sftp.upload")} onClick={() => void upload()} icon={ArrowUpFromLine} disabled={localSelection.entry?.kind !== "file"} />
-        <IconButton label={t("sftp.download")} onClick={() => void download()} icon={ArrowDownToLine} disabled={!localSelection.directoryPath || (transferProtocol === "sftp" ? !selected || selected.kind === "directory" : scpRemotePath === "/" || !scpRemotePath.startsWith("/"))} />
+        <IconButton label={t("sftp.upload")} onClick={() => void upload()} icon={ArrowUpFromLine} disabled={(localSelection.entries?.length ?? (localSelection.entry ? 1 : 0)) === 0} />
+        <IconButton label={t("sftp.download")} onClick={() => void download()} icon={ArrowDownToLine} disabled={!localSelection.directoryPath || (transferProtocol === "sftp" ? selectedEntries.length === 0 : scpRemotePath === "/" || !scpRemotePath.startsWith("/"))} />
         <select value={transferProtocol} onChange={(event) => setTransferProtocol(event.target.value as TerminalTransferProtocol)} aria-label={t("sftp.transferProtocol")} className="h-6 bg-dock-bg border border-dock-border rounded text-[10px] text-dock-text px-1">
           <option value="sftp">SFTP</option>
           <option value="scp">SCP</option>
@@ -292,8 +338,11 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
             {!loading && error && <div className="p-3 text-xs text-red-400 break-words" role="alert">{error}</div>}
             {!loading && !error && sortedEntries.length === 0 && <div className="p-4 text-center text-xs text-dock-text-muted">{t("sftp.empty")}</div>}
             {!loading && !error && sortedEntries.map((entry) => (
-              <button key={entry.path} type="button" role="option" aria-selected={selectedPath === entry.path} draggable={entry.kind === "file"} onDragStart={(event) => {
-                if (entry.kind === "file") setFileDragPayload(event.dataTransfer, REMOTE_FILE_DRAG_TYPE, { name: entry.name, path: entry.path });
+              <button key={entry.path} type="button" role="option" aria-selected={selectedPaths.includes(entry.path)} draggable={entry.kind === "file" || entry.kind === "directory"} onDragStart={(event) => {
+                if (entry.kind !== "file" && entry.kind !== "directory") return;
+                const dragEntries = selectedPaths.includes(entry.path) ? selectedEntries : [entry];
+                const items = dragEntries.filter((item) => item.kind === "file" || item.kind === "directory").map((item) => ({ name: item.name, path: item.path, kind: item.kind as "file" | "directory" }));
+                if (items.length > 0) setFileDragPayload(event.dataTransfer, REMOTE_FILE_DRAG_TYPE, { ...items[0], items });
               }} onDragEnd={clearFileDragPayload} onDragEnter={(event) => {
                 if (entry.kind !== "directory") return;
                 event.stopPropagation();
@@ -314,7 +363,7 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
                 remoteDropDepth.current = 0;
                 setRemoteDropActive(false);
                 dropLocalFile(event, entry.path);
-              }} onClick={() => setSelectedPath(entry.path)} onDoubleClick={() => entry.kind === "directory" ? void loadDirectory(entry.path) : setSelectedPath(entry.path)} className={`w-full h-8 px-2 grid grid-cols-[18px_minmax(0,1fr)_70px] items-center gap-1 text-start border-b border-dock-border/40 hover:bg-dock-surface-hover focus:outline-none focus:bg-dock-surface-hover ${selectedPath === entry.path ? "bg-dock-surface" : ""}`}>
+              }} onClick={(event) => selectRemoteEntry(entry, event)} onDoubleClick={() => entry.kind === "directory" ? void loadDirectory(entry.path) : setSelectedPaths([entry.path])} className={`w-full h-8 px-2 grid grid-cols-[18px_minmax(0,1fr)_70px] items-center gap-1 text-start border-b border-dock-border/40 hover:bg-dock-surface-hover focus:outline-none focus:bg-dock-surface-hover ${selectedPaths.includes(entry.path) ? "bg-dock-surface" : ""}`}>
                 {entry.kind === "directory" ? <Folder size={14} className="text-amber-400" /> : <File size={14} className="text-dock-text-muted" />}
                 <span className="truncate text-[11px] text-dock-text" dir="auto" title={entry.name}>{entry.name}</span>
                 <span className="text-[10px] text-dock-text-muted text-end tabular-nums">{entry.kind === "directory" ? "" : formatTransferSize(entry.size ?? 0)}</span>

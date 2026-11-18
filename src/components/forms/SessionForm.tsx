@@ -24,9 +24,10 @@ export function SessionForm({ onSubmit, onCancel, folders, initialFolderId, init
   const sessions = useSessionStore((state) => state.sessions);
   const settings = useSettingsStore.getState();
   const defaultProtocol = settings.defaultProtocol.toLowerCase() as "ssh" | "telnet" | "serial";
+  const initialCredential = credentials.find((credential) => credential.id === initialSession?.credential_profile_id);
   const [jumpHostSelection, setJumpHostSelection] = useState("");
   const [formData, setFormData] = useState<CreateSessionRequest>(() => initialSession
-    ? { ...initialSession }
+    ? { ...initialSession, username: initialCredential?.username || initialSession.username }
     : {
         name: "",
         host: "",
@@ -179,6 +180,7 @@ export function SessionForm({ onSubmit, onCancel, folders, initialFolderId, init
               value={formData.username || ""}
               onChange={(v) => setFormData((p) => ({ ...p, username: v }))}
               placeholder="admin"
+              disabled={Boolean(formData.credential_profile_id)}
             />
           )}
 
@@ -424,6 +426,7 @@ function Field({
   placeholder,
   type = "text",
   required,
+  disabled,
 }: {
   label: string;
   value: string;
@@ -431,6 +434,7 @@ function Field({
   placeholder?: string;
   type?: string;
   required?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div>
@@ -441,7 +445,8 @@ function Field({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         required={required}
-        className="w-full px-3 py-2 rounded bg-dock-bg border border-dock-border text-xs text-dock-text placeholder-dock-text-muted focus:border-dock-accent focus:outline-none"
+        disabled={disabled}
+        className="w-full px-3 py-2 rounded bg-dock-bg border border-dock-border text-xs text-dock-text placeholder-dock-text-muted focus:border-dock-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
       />
     </div>
   );
