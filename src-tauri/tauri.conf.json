@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/static/tauri-conf-schema.json",
   "productName": "SessionDock",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "identifier": "com.sessiondock.app",
   "build": {
     "frontendDist": "../dist",
@@ -28,8 +28,12 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis"],
-    "resources": ["../THIRD_PARTY_NOTICES.md"],
+    "targets": [
+      "nsis"
+    ],
+    "resources": [
+      "../THIRD_PARTY_NOTICES.md"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
