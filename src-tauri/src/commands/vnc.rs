@@ -63,6 +63,15 @@ async fn start_proxy(
             "VNC port must be between 1 and 65535".into(),
         ));
     }
+    let remote = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        TcpStream::connect((host.as_str(), port)),
+    )
+    .await
+    .map_err(|_| AppError::Generic(format!("VNC connection to {host}:{port} timed out")))?
+    .map_err(|error| {
+        AppError::Generic(format!("VNC connection to {host}:{port} failed: {error}"))
+    })?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
     let local_port = listener.local_addr()?.port();
     let id = uuid::Uuid::new_v4().to_string();
@@ -73,6 +82,7 @@ async fn start_proxy(
     );
     let expected_path = format!("/vnc/{token}");
     let handle = tokio::spawn(async move {
+        let mut initial_remote = Some(remote);
         loop {
             let (socket, _) = match listener.accept().await {
                 Ok(connection) => connection,
@@ -83,8 +93,11 @@ async fn start_proxy(
             };
             let expected_path = expected_path.clone();
             let host = host.clone();
+            let remote = initial_remote.take();
             tokio::spawn(async move {
-                if let Err(error) = proxy_connection(socket, &expected_path, &host, port).await {
+                if let Err(error) =
+                    proxy_connection(socket, &expected_path, &host, port, remote).await
+                {
                     log::warn!("VNC bridge connection ended: {error}");
                 }
             });
@@ -122,6 +135,7 @@ async fn proxy_connection(
     expected_path: &str,
     host: &str,
     port: u16,
+    remote: Option<TcpStream>,
 ) -> Result<(), AppError> {
     let websocket =
         tokio_tungstenite::accept_hdr_async(socket, |request: &Request, response: Response| {
@@ -133,9 +147,12 @@ async fn proxy_connection(
         })
         .await
         .map_err(|error| AppError::Generic(format!("VNC WebSocket handshake failed: {error}")))?;
-    let remote = TcpStream::connect((host, port))
-        .await
-        .map_err(|error| AppError::Generic(format!("VNC connection failed: {error}")))?;
+    let remote = match remote {
+        Some(remote) => remote,
+        None => TcpStream::connect((host, port))
+            .await
+            .map_err(|error| AppError::Generic(format!("VNC connection failed: {error}")))?,
+    };
     let (mut websocket_write, mut websocket_read) = websocket.split();
     let (mut remote_read, mut remote_write) = remote.into_split();
     let mut remote_buffer = vec![0_u8; 64 * 1024];
@@ -325,5 +342,21 @@ mod tests {
             .unwrap();
         assert_eq!(response.into_data().as_ref(), &[1, 2, 3, 4]);
         echo.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reports_unavailable_remote_before_starting_proxy() {
+        let unavailable = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+
+        let error = match start_proxy(&VncProxyManager::new(), "127.0.0.1".into(), port).await {
+            Ok(_) => panic!("an unavailable endpoint must fail proxy startup"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("VNC connection to 127.0.0.1"));
     }
 }

@@ -21,10 +21,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 # Use Node.js to safely modify JSON (avoids PowerShell BOM/encoding issues)
 node -e "const fs=require('fs');const t=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8'));t.version='$Version';fs.writeFileSync('src-tauri/tauri.conf.json',JSON.stringify(t,null,2)+'\n');console.log('  tauri.conf.json:',t.version)"
 
-# Cargo.toml (simple text replace)
+# Cargo.toml package version (dependency versions may appear inline)
 $cargoPath = "src-tauri\Cargo.toml"
 $cargo = Get-Content $cargoPath -Raw
-$cargo = $cargo -replace 'version = "\d+\.\d+\.\d+"', "version = `"$Version`""
+$cargo = $cargo -replace '(?m)^version = "\d+\.\d+\.\d+"$', "version = `"$Version`""
 [System.IO.File]::WriteAllText("$PWD\$cargoPath", $cargo)
 Write-Host "  Cargo.toml: $Version"
 
