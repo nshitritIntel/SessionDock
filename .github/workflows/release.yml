@@ -82,7 +82,7 @@ jobs:
         run: npm run lint
 
       - name: Audit npm dependencies
-        run: npm audit --audit-level=high
+        run: npm run audit:security
 
       - name: Rust format check
         run: cargo fmt -- --check
