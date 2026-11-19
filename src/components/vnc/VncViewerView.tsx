@@ -17,7 +17,8 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
   const [viewOnly, setViewOnly] = useState(false);
   const [scaled, setScaled] = useState(true);
   const updateTabStatus = useAppStore((state) => state.updateTabStatus);
-  const port = tab.port || session?.port || 5900;
+  const host = session?.host ?? tab.host;
+  const port = session?.port ?? tab.port ?? 5900;
 
   const disconnect = async () => {
     rfbRef.current?.disconnect();
@@ -40,7 +41,7 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
     setCredentialsRequired(false);
     updateTabStatus(tab.id, "connecting");
     try {
-      const proxy = await startVncProxy(tab.host, port);
+      const proxy = await startVncProxy(host, port);
       proxyIdRef.current = proxy.id;
       let secret = tab.password ?? "";
       const credentialProfileId = tab.credentialProfileId ?? session?.credential_profile_id;
@@ -127,11 +128,11 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
     <div className="flex h-full min-h-0 flex-col bg-black">
       <div className="flex h-10 flex-shrink-0 items-center gap-2 border-b border-dock-border bg-dock-surface px-2">
         <MonitorUp size={14} className="text-sky-400" />
-        <span className="min-w-0 flex-1 truncate text-[11px] text-dock-text-muted">{tab.host}:{port}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] text-dock-text-muted">{host}:{port}</span>
         <button type="button" className="icon-button" title={viewOnly ? "Enable remote input" : "View only"} onClick={() => { const next = !viewOnly; setViewOnly(next); if (rfbRef.current) rfbRef.current.viewOnly = next; }}>{viewOnly ? <Eye size={13} /> : <EyeOff size={13} />}</button>
         <button type="button" className="icon-button" title={scaled ? "Show at native size" : "Fit to workspace"} onClick={() => { const next = !scaled; setScaled(next); if (rfbRef.current) rfbRef.current.scaleViewport = next; }}><Maximize2 size={13} /></button>
         {rfbRef.current ? <button type="button" className="icon-button" title="Disconnect" onClick={() => void disconnect()}><Unplug size={13} /></button> : <button type="button" className="icon-button" title="Connect" onClick={() => void connect()}><PlugZap size={13} /></button>}
-        <button type="button" className="icon-button" title="Open in external viewer" onClick={() => void launchVncViewer(tab.host, port)}><ExternalLink size={13} /></button>
+        <button type="button" className="icon-button" title="Open in external viewer" onClick={() => void launchVncViewer(host, port)}><ExternalLink size={13} /></button>
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">

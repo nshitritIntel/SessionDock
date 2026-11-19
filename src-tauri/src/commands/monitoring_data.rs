@@ -45,6 +45,7 @@ pub struct InterfaceSnapshot {
 pub struct MonitorSampleDetail {
     sample: MonitorSample,
     interfaces: Vec<InterfaceSnapshot>,
+    raw_output: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -260,7 +261,16 @@ pub fn get_monitor_sample_detail(
             other => AppError::Database(other),
         })?;
     let interfaces = interfaces_for_sample(&conn, sample_id)?;
-    Ok(MonitorSampleDetail { sample, interfaces })
+    let raw_output = conn.query_row(
+        "SELECT raw_output FROM monitor_samples WHERE id = ?1",
+        params![sample_id],
+        |row| row.get(0),
+    )?;
+    Ok(MonitorSampleDetail {
+        sample,
+        interfaces,
+        raw_output,
+    })
 }
 
 #[tauri::command]

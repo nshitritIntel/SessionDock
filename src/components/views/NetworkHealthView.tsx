@@ -27,6 +27,7 @@ import {
   getMonitorDefinitions,
   getMonitorIncidents,
   getMonitorMaintenance,
+  getMonitorSampleDetail,
   getMonitorSamples,
   runMonitorNow,
   setMonitorEnabled,
@@ -36,6 +37,7 @@ import {
   type MonitorDefinition,
   type MonitorIncident,
   type MonitorSample,
+  type MonitorSampleDetail,
 } from "../../api/commands";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useToastStore } from "../../stores/toastStore";
@@ -57,6 +59,7 @@ export function NetworkHealthView() {
   const [runningId, setRunningId] = useState<string>();
   const [setupOpen, setSetupOpen] = useState(false);
   const [comparison, setComparison] = useState<BaselineComparison>();
+  const [sampleDetail, setSampleDetail] = useState<MonitorSampleDetail>();
 
   const selectedMonitor = monitors.find((monitor) => monitor.id === selectedMonitorId);
   const sshSessions = sessions.filter((session) => session.protocol === "ssh");
@@ -94,6 +97,7 @@ export function NetworkHealthView() {
     if (!selectedMonitorId) {
       setSamples([]);
       setBaselines([]);
+      setSampleDetail(undefined);
       return;
     }
     let cancelled = false;
@@ -104,6 +108,7 @@ export function NetworkHealthView() {
       if (!cancelled) {
         setSamples(nextSamples);
         setBaselines(nextBaselines);
+        setSampleDetail(undefined);
       }
     }).catch((error) => {
       if (!cancelled) addToast("error", `${t("monitoring.loadFailed")}: ${String(error)}`);
@@ -231,6 +236,14 @@ export function NetworkHealthView() {
             onRun={runNow}
             onToggle={toggleMonitor}
             onDelete={removeMonitor}
+            sampleDetail={sampleDetail}
+            onSelectSample={async (sampleId) => {
+              try {
+                setSampleDetail(await getMonitorSampleDetail(sampleId));
+              } catch (error) {
+                addToast("error", `${t("monitoring.loadFailed")}: ${String(error)}`);
+              }
+            }}
           />
         ) : activeTab === "incidents" ? (
           <Incidents
@@ -308,6 +321,7 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
   const addToast = useToastStore((state) => state.addToast);
   const [sessionId, setSessionId] = useState(sessions[0]?.id ?? "");
   const [name, setName] = useState("");
+  const [interfaceName, setInterfaceName] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState(300);
   const [submitting, setSubmitting] = useState(false);
 
@@ -320,6 +334,7 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
         sessionId,
         providerId: "arista-eos",
         monitorKind: "interfaces",
+        interfaceName: interfaceName.trim(),
         displayName: name.trim() || `${session?.name ?? "Arista"} interfaces`,
         intervalSeconds,
         retentionHours: 168,
@@ -334,13 +349,17 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
 
   return (
     <form onSubmit={submit} className="border-b border-dock-border bg-dock-surface px-5 py-4">
-      <div className="mx-auto grid max-w-7xl items-end gap-3 sm:grid-cols-[minmax(12rem,1fr)_minmax(12rem,1fr)_10rem_auto]">
+      <div className="mx-auto grid max-w-7xl items-end gap-3 lg:grid-cols-[minmax(12rem,1fr)_10rem_minmax(12rem,1fr)_9rem_auto]">
         <label className="text-[11px] text-dock-text-muted">
           {t("monitoring.sshSession")}
           <select required value={sessionId} onChange={(event) => setSessionId(event.target.value)} className="form-input mt-1 w-full">
             <option value="">{t("monitoring.selectSession")}</option>
             {sessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.host}</option>)}
           </select>
+        </label>
+        <label className="text-[11px] text-dock-text-muted">
+          {t("monitoring.interface")}
+          <input required value={interfaceName} onChange={(event) => setInterfaceName(event.target.value)} maxLength={64} placeholder="Ethernet15" dir="ltr" spellCheck={false} className="form-input mt-1 w-full font-mono" />
         </label>
         <label className="text-[11px] text-dock-text-muted">
           {t("monitoring.monitorName")}
@@ -354,7 +373,7 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
         </label>
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="icon-button" title={t("common.cancel")}><X size={15} /></button>
-          <button disabled={submitting || !sessionId} className="rounded-md bg-dock-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{t("common.create")}</button>
+          <button disabled={submitting || !sessionId || !interfaceName.trim()} className="rounded-md bg-dock-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{t("common.create")}</button>
         </div>
       </div>
     </form>
@@ -366,26 +385,28 @@ function HealthMetric({ label, value, tone }: { label: string; value: number; to
   return <div className="bg-dock-surface px-4 py-3"><div className={`text-xl font-semibold tabular-nums ${tones[tone]}`}>{value}</div><div className="text-[11px] text-dock-text-muted">{label}</div></div>;
 }
 
-function Overview({ monitors, selectedId, samples, runningId, onSelect, onRun, onToggle, onDelete }: {
+function Overview({ monitors, selectedId, samples, runningId, sampleDetail, onSelect, onRun, onToggle, onDelete, onSelectSample }: {
   monitors: MonitorDefinition[]; selectedId?: string; samples: MonitorSample[]; runningId?: string;
+  sampleDetail?: MonitorSampleDetail;
   onSelect: (id: string) => void; onRun: (id: string) => Promise<void>;
   onToggle: (monitor: MonitorDefinition) => Promise<void>; onDelete: (monitor: MonitorDefinition) => Promise<void>;
+  onSelectSample: (sampleId: number) => Promise<void>;
 }) {
   const { t } = useTranslation();
   if (monitors.length === 0) return <Empty icon={Activity} text={t("monitoring.noMonitors")} />;
   return <div className="grid gap-5 xl:grid-cols-[minmax(30rem,1fr)_22rem]">
     <div className="overflow-hidden rounded-md border border-dock-border">
       <table className="w-full text-left text-xs"><thead className="bg-dock-surface text-[10px] uppercase text-dock-text-muted"><tr><th className="px-3 py-2">{t("monitoring.device")}</th><th>{t("monitoring.status")}</th><th>{t("monitoring.lastSample")}</th><th className="w-28" /></tr></thead>
-      <tbody>{monitors.map((monitor) => <tr key={monitor.id} onClick={() => onSelect(monitor.id)} className={`cursor-pointer border-t border-dock-border ${selectedId === monitor.id ? "bg-dock-accent/5" : "hover:bg-dock-surface"}`}><td className="px-3 py-2.5"><div className="font-medium text-dock-text">{monitor.displayName}</div><div className="text-[10px] text-dock-text-muted">{monitor.sessionName} · {monitor.host}</div></td><td><Status value={monitor.latestStatus ?? "unknown"} /></td><td className="text-dock-text-muted">{formatTime(monitor.latestObservedAt)}</td><td><div className="flex justify-end gap-1 pr-2"><button className="icon-button" title={monitor.enabled ? t("monitoring.pause") : t("monitoring.enable")} onClick={(event) => { event.stopPropagation(); void onToggle(monitor); }}>{monitor.enabled ? <Pause size={13} /> : <Play size={13} />}</button><button className="icon-button" title={t("monitoring.runNow")} disabled={runningId === monitor.id || !monitor.enabled} onClick={(event) => { event.stopPropagation(); void onRun(monitor.id); }}><RefreshCw size={13} className={runningId === monitor.id ? "animate-spin" : ""} /></button><button className="icon-button text-red-400" title={t("common.delete")} onClick={(event) => { event.stopPropagation(); void onDelete(monitor); }}><Trash2 size={13} /></button></div></td></tr>)}</tbody></table>
+      <tbody>{monitors.map((monitor) => <tr key={monitor.id} onClick={() => onSelect(monitor.id)} className={`cursor-pointer border-t border-dock-border ${selectedId === monitor.id ? "bg-dock-accent/5" : "hover:bg-dock-surface"}`}><td className="px-3 py-2.5"><div className="font-medium text-dock-text">{monitor.displayName}</div><div className="text-[10px] text-dock-text-muted">{monitor.sessionName} · {monitor.host} · <span className="font-mono" dir="ltr">{monitor.interfaceName ?? t("monitoring.legacyScope")}</span></div></td><td><Status value={monitor.latestStatus ?? "unknown"} /></td><td className="text-dock-text-muted">{formatTime(monitor.latestObservedAt)}</td><td><div className="flex justify-end gap-1 pr-2"><button className="icon-button" title={monitor.interfaceName ? (monitor.enabled ? t("monitoring.pause") : t("monitoring.enable")) : t("monitoring.legacyScopeHelp")} disabled={!monitor.interfaceName} onClick={(event) => { event.stopPropagation(); void onToggle(monitor); }}>{monitor.enabled ? <Pause size={13} /> : <Play size={13} />}</button><button className="icon-button" title={t("monitoring.runNow")} disabled={runningId === monitor.id || !monitor.enabled || !monitor.interfaceName} onClick={(event) => { event.stopPropagation(); void onRun(monitor.id); }}><RefreshCw size={13} className={runningId === monitor.id ? "animate-spin" : ""} /></button><button className="icon-button text-red-400" title={t("common.delete")} onClick={(event) => { event.stopPropagation(); void onDelete(monitor); }}><Trash2 size={13} /></button></div></td></tr>)}</tbody></table>
     </div>
-    <div><h2 className="mb-3 text-xs font-medium text-dock-text">{t("monitoring.recentHealth")}</h2><History samples={samples} /></div>
+    <div><h2 className="mb-3 text-xs font-medium text-dock-text">{t("monitoring.recentHealth")}</h2><History samples={samples} onSelect={onSelectSample} />{sampleDetail && <details open className="mt-4 border-t border-dock-border pt-3"><summary className="cursor-pointer text-[11px] font-medium text-dock-text">{t("monitoring.sampleDetails")}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-dock-bg p-2 text-[10px] text-dock-text-secondary" dir="ltr">{sampleDetail.rawOutput ?? sampleDetail.sample.error ?? t("monitoring.noRawOutput")}</pre></details>}</div>
   </div>;
 }
 
-function History({ samples }: { samples: MonitorSample[] }) {
+function History({ samples, onSelect }: { samples: MonitorSample[]; onSelect: (sampleId: number) => Promise<void> }) {
   const { t } = useTranslation();
   if (samples.length === 0) return <Empty icon={Activity} text={t("monitoring.noSamples")} />;
-  return <div className="space-y-1">{samples.slice(0, 16).map((sample) => <div key={sample.id} className="grid grid-cols-[5rem_1fr_auto] items-center gap-2 py-1.5"><span className="text-[10px] text-dock-text-muted">{formatTime(sample.observedAt)}</span><div className="h-1.5 overflow-hidden rounded-sm bg-dock-border"><div className={`h-full ${statusBar(sample.status)}`} style={{ width: `${Math.max(8, 100 - (sample.summary.downCount ?? 0) * 10)}%` }} /></div><Status value={sample.status} /></div>)}</div>;
+  return <div className="space-y-1">{samples.slice(0, 16).map((sample) => <button type="button" key={sample.id} title={t("monitoring.viewSample")} onClick={() => void onSelect(sample.id)} className="grid w-full grid-cols-[5rem_1fr_auto] items-center gap-2 py-1.5 text-start hover:bg-dock-surface"><span className="text-[10px] text-dock-text-muted">{formatTime(sample.observedAt)}</span><div><div className="h-1.5 overflow-hidden rounded-sm bg-dock-border"><div className={`h-full ${statusBar(sample.status)}`} style={{ width: `${Math.max(8, 100 - (sample.summary.downCount ?? 0) * 10)}%` }} /></div><div className="mt-1 text-[9px] text-dock-text-muted">{sample.summary.errorCount ?? 0} {t("monitoring.errors")} · {sample.summary.logCount ?? 0} {t("monitoring.logs")}</div></div><Status value={sample.status} /></button>)}</div>;
 }
 
 function Incidents({ incidents, monitorNames, onAcknowledge }: { incidents: MonitorIncident[]; monitorNames: Map<string, string>; onAcknowledge: (id: string) => Promise<void> }) {
@@ -399,7 +420,7 @@ function Baselines({ monitor, monitors, baselines, comparison, onSelectMonitor, 
   onSelectMonitor: (id: string) => void; onCapture: () => Promise<void>; onCompare: (id: string) => Promise<void>; onDelete: (id: string) => Promise<void>;
 }) {
   const { t } = useTranslation();
-  return <div><div className="mb-4 flex flex-wrap items-center gap-2"><select value={monitor?.id ?? ""} onChange={(event) => onSelectMonitor(event.target.value)} className="form-input min-w-56">{monitors.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><button disabled={!monitor} onClick={() => void onCapture()} className="flex items-center gap-1.5 rounded-md bg-dock-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Plus size={13} />{t("monitoring.captureBaseline")}</button></div>{baselines.length === 0 ? <Empty icon={GitCompare} text={t("monitoring.noBaselines")} /> : <div className="divide-y divide-dock-border border-y border-dock-border">{baselines.map((baseline) => <div key={baseline.id} className="flex items-center gap-3 py-3"><GitCompare size={14} className="text-dock-text-muted" /><div className="min-w-0 flex-1"><div className="text-xs font-medium text-dock-text">{baseline.name}</div><div className="text-[10px] text-dock-text-muted">{formatTime(baseline.sourceObservedAt)}</div></div><button className="icon-button" title={t("monitoring.compare")} onClick={() => void onCompare(baseline.id)}><GitCompare size={13} /></button><button className="icon-button text-red-400" title={t("common.delete")} onClick={() => void onDelete(baseline.id)}><Trash2 size={13} /></button></div>)}</div>}{comparison && <div className="mt-5 grid grid-cols-3 gap-px overflow-hidden rounded-md border border-dock-border bg-dock-border"><Diff label={t("monitoring.added")} values={comparison.addedInterfaces} tone="text-emerald-400" /><Diff label={t("monitoring.removed")} values={comparison.removedInterfaces} tone="text-red-400" /><Diff label={t("monitoring.changed")} values={comparison.changedInterfaces} tone="text-amber-400" /></div>}</div>;
+  return <div><p className="mb-4 max-w-3xl text-[11px] text-dock-text-muted">{t("monitoring.baselineHelp")}</p><div className="mb-4 flex flex-wrap items-center gap-2"><select value={monitor?.id ?? ""} onChange={(event) => onSelectMonitor(event.target.value)} className="form-input min-w-56">{monitors.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><button disabled={!monitor} onClick={() => void onCapture()} className="flex items-center gap-1.5 rounded-md bg-dock-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Plus size={13} />{t("monitoring.captureBaseline")}</button></div>{baselines.length === 0 ? <Empty icon={GitCompare} text={t("monitoring.noBaselines")} /> : <div className="divide-y divide-dock-border border-y border-dock-border">{baselines.map((baseline) => <div key={baseline.id} className="flex items-center gap-3 py-3"><GitCompare size={14} className="text-dock-text-muted" /><div className="min-w-0 flex-1"><div className="text-xs font-medium text-dock-text">{baseline.name}</div><div className="text-[10px] text-dock-text-muted">{formatTime(baseline.sourceObservedAt)}</div></div><button className="icon-button" title={t("monitoring.compare")} onClick={() => void onCompare(baseline.id)}><GitCompare size={13} /></button><button className="icon-button text-red-400" title={t("common.delete")} onClick={() => void onDelete(baseline.id)}><Trash2 size={13} /></button></div>)}</div>}{comparison && <div className="mt-5 grid grid-cols-3 gap-px overflow-hidden rounded-md border border-dock-border bg-dock-border"><Diff label={t("monitoring.added")} values={comparison.addedInterfaces} tone="text-emerald-400" /><Diff label={t("monitoring.removed")} values={comparison.removedInterfaces} tone="text-red-400" /><Diff label={t("monitoring.changed")} values={comparison.changedInterfaces} tone="text-amber-400" /></div>}</div>;
 }
 
 function Maintenance({ markers, sessions, onCreate, onDelete }: { markers: MaintenanceMarker[]; sessions: ReturnType<typeof useSessionStore.getState>["sessions"]; onCreate: (request: { sessionId?: string; startsAt: string; endsAt: string; reason: string }) => Promise<void>; onDelete: (id: string) => Promise<void> }) {

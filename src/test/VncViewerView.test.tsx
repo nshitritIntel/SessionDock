@@ -2,6 +2,7 @@ import { render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VncViewerView } from "../components/vnc/VncViewerView";
 import { useAppStore, type TerminalTab } from "../stores/appStore";
+import type { Session } from "../types";
 
 const mocks = vi.hoisted(() => ({ invoke: vi.fn(), rfb: vi.fn() }));
 
@@ -67,6 +68,23 @@ describe("VncViewerView", () => {
     view.unmount();
     await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("stop_vnc_proxy", {
       id: "33333333-3333-4333-8333-333333333333",
+    }));
+  });
+
+  it("uses the current saved endpoint instead of stale tab metadata", async () => {
+    const session = {
+      id: "vnc-session",
+      name: "VM console",
+      protocol: "vnc",
+      host: "192.0.2.80",
+      port: 5780,
+    } as Session;
+
+    render(<VncViewerView tab={tab} session={session} active />);
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("start_vnc_proxy", {
+      host: "192.0.2.80",
+      port: 5780,
     }));
   });
 
