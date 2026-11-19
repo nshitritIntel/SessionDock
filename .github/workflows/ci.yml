@@ -43,6 +43,11 @@ jobs:
       - name: Run frontend tests
         run: npm test
 
+      - name: Test updater manifest normalization
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-normalize-updater-manifest.ps1
+
       - name: Rust format check
         run: cargo fmt -- --check
         working-directory: src-tauri
