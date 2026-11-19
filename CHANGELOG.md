@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Publish updater manifests with public release-download URLs instead of GitHub API asset URLs that reject unauthenticated downloads
 - Preserve authentication failures instead of replacing them with a generic unexpected-disconnect message
 - Close active TCP and WebSocket bridge tasks when their owning VNC proxy stops
 - Prevent rejected local WebSocket requests from consuming the verified remote TCP connection

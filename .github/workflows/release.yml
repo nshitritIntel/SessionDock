@@ -84,6 +84,10 @@ jobs:
       - name: Audit npm dependencies
         run: npm run audit:security
 
+      - name: Test updater manifest normalization
+        shell: pwsh
+        run: ./scripts/test-normalize-updater-manifest.ps1
+
       - name: Rust format check
         run: cargo fmt -- --check
         working-directory: src-tauri
@@ -119,6 +123,40 @@ jobs:
           uploadUpdaterJson: true
           updaterJsonPreferNsis: true
           args: "--bundles nsis"
+
+      - name: Normalize updater download URL
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $tempDirectory = Join-Path $env:RUNNER_TEMP 'sessiondock-updater-manifest'
+          Remove-Item $tempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $tempDirectory | Out-Null
+          try {
+            gh release download $env:RELEASE_TAG --pattern latest.json --dir $tempDirectory
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to download latest.json.' }
+
+            $installerNames = @(
+              gh release view $env:RELEASE_TAG --json assets --jq '.assets[].name | select(endswith("_x64-setup.exe"))'
+            )
+            if ($LASTEXITCODE -ne 0 -or $installerNames.Count -ne 1) {
+              throw "Expected exactly one Windows installer asset, found $($installerNames.Count)."
+            }
+
+            ./scripts/normalize-updater-manifest.ps1 `
+              -ManifestPath (Join-Path $tempDirectory 'latest.json') `
+              -Repository $env:RELEASE_REPOSITORY `
+              -Tag $env:RELEASE_TAG `
+              -InstallerName $installerNames[0]
+
+            gh release upload $env:RELEASE_TAG (Join-Path $tempDirectory 'latest.json') --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Unable to upload normalized latest.json.' }
+          }
+          finally {
+            Remove-Item $tempDirectory -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
   publish:
     needs: build-windows
