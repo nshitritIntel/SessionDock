@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.4] - 2026-11-19
+
+### Added
+
+- Add embedded RealVNC RA2 and RA2_256 authentication with full-session authenticated AES-EAX encryption
+- Prefer RA2_256 when a RealVNC server offers both encrypted RSA-AES security types
+
+### Fixed
+
+- Correct the RFB security type mapping to use `129` for RA2_256 and `130` for RA2ne_256 while leaving unknown proprietary types unlabeled
+- Preserve encrypted record ordering and AES-EAX counters across authentication and the desktop session, including fragmented WebSocket records
+
+### Security
+
+- Close the embedded connection on malformed records or authentication-tag failures without retrying plaintext or RA2ne
+- Retain explicit RSA server-key approval, bounded encrypted buffering, downgrade blocking, and the external RealVNC Viewer fallback
+
 ## [2.0.3] - 2026-11-19
 
 ### Added

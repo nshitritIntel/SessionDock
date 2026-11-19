@@ -204,8 +204,8 @@ impl RfbHandshakeObserver {
         let encrypted_ra2_offered = diagnostics
             .offered_security_types
             .iter()
-            .any(|security_type| matches!(security_type, 5 | 13));
-        if encrypted_ra2_offered && matches!(selected, 6 | 14) {
+            .any(|security_type| matches!(security_type, 5 | 129));
+        if encrypted_ra2_offered && matches!(selected, 6 | 130) {
             diagnostics.failure = Some(VncFailure {
                 code: "encryption_downgrade_blocked",
                 message: "The embedded viewer cannot use unencrypted RA2ne when encrypted RA2 is offered.",
@@ -664,12 +664,29 @@ mod tests {
         observer
             .observe_client(b"RFB 003.008\n", &mut diagnostics)
             .unwrap();
-        observer.observe_server(&[2, 13, 14], &mut diagnostics);
+        observer.observe_server(&[2, 129, 130], &mut diagnostics);
         let error = observer
-            .observe_client(&[14], &mut diagnostics)
+            .observe_client(&[130], &mut diagnostics)
             .unwrap_err();
 
         assert!(error.to_string().contains("downgrade blocked"));
+    }
+
+    #[test]
+    fn accepts_ra2_256_for_realvnc_security_list() {
+        let mut observer = RfbHandshakeObserver::default();
+        let mut diagnostics = VncProxyDiagnostics::default();
+
+        observer.observe_server(b"RFB 005.000\n", &mut diagnostics);
+        observer
+            .observe_client(b"RFB 003.008\n", &mut diagnostics)
+            .unwrap();
+        observer.observe_server(&[4, 13, 133, 5, 129], &mut diagnostics);
+        observer.observe_client(&[129], &mut diagnostics).unwrap();
+
+        assert_eq!(diagnostics.offered_security_types, vec![13, 133, 5, 129]);
+        assert_eq!(diagnostics.selected_security_type, Some(129));
+        assert!(diagnostics.failure.is_none());
     }
 
     #[test]

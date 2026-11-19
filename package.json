@@ -1,7 +1,7 @@
 {
   "name": "sessiondock",
   "private": true,
-  "version": "2.0.3",
+  "version": "2.0.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.0",
-    "@novnc/novnc": "^1.7.0",
+    "@novnc/novnc": "https://github.com/nshitritIntel/noVNC/archive/dac4e135545a81442e78aed3a00cc853e38872c0.tar.gz",
     "@tanstack/react-virtual": "^3.13.0",
     "@tauri-apps/api": "^2.12.4",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",

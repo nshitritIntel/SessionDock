@@ -12,6 +12,9 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    exclude: ["@novnc/novnc"],
+  },
   build: {
     target: "esnext",
   },
