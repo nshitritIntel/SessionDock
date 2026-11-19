@@ -121,7 +121,7 @@ describe("VncViewerView", () => {
       if (command === "get_vnc_proxy_diagnostics") return Promise.resolve({
         stage: "security_negotiation",
         serverProtocolVersion: "003.008",
-        offeredSecurityTypes: [5, 13],
+        offeredSecurityTypes: [13, 133, 5, 129],
       });
       return Promise.resolve(undefined);
     });
@@ -130,10 +130,30 @@ describe("VncViewerView", () => {
 
     mocks.instances[0].dispatchEvent(new CustomEvent("disconnect", { detail: { clean: false } }));
 
-    expect(await screen.findByText("Embedded viewer encryption is incompatible")).toBeInTheDocument();
+    expect(await screen.findByText("Embedded viewer could not establish encryption")).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: /Open in RealVNC Viewer/i })).toHaveLength(2);
     fireEvent.click(screen.getByText("Technical details"));
-    expect(screen.getByText("Server security types: RA2 (5), RA2_256 (13)")).toBeInTheDocument();
+    expect(screen.getByText("Server security types: Unknown (13), Unknown (133), RA2 (5), RA2_256 (129)")).toBeInTheDocument();
+  });
+
+  it("does not report RA2_256 as unsupported after it was selected", async () => {
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "start_vnc_proxy") return Promise.resolve({ id: "44444444-4444-4444-8444-444444444444", url: "ws://127.0.0.1:49152/vnc/token" });
+      if (command === "get_vnc_proxy_diagnostics") return Promise.resolve({
+        stage: "authentication",
+        serverProtocolVersion: "005.000",
+        offeredSecurityTypes: [13, 133, 5, 129],
+        selectedSecurityType: 129,
+      });
+      return Promise.resolve(undefined);
+    });
+    render(<VncViewerView tab={tab} active />);
+    await waitFor(() => expect(mocks.instances).toHaveLength(1));
+
+    mocks.instances[0].dispatchEvent(new CustomEvent("disconnect", { detail: { clean: false } }));
+
+    expect(await screen.findByText("VNC server disconnected")).toBeInTheDocument();
+    expect(screen.queryByText("Embedded viewer could not establish encryption")).not.toBeInTheDocument();
   });
 
   it("preserves a supported authentication failure instead of replacing it on disconnect", async () => {

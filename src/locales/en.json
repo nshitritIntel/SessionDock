@@ -26,7 +26,7 @@
       "connection_refused": { "title": "VNC connection refused", "message": "The host is reachable, but no VNC server accepted the configured port." },
       "connection_timeout": { "title": "VNC connection timed out", "message": "The VNC server did not respond before the connection timeout." },
       "dns": { "title": "VNC hostname not found", "message": "SessionDock could not resolve the configured VNC hostname." },
-      "encryption": { "title": "Embedded viewer encryption is incompatible", "message": "The server requires encrypted RealVNC RA2 or RA2_256, which noVNC does not support. SessionDock will not downgrade to an unencrypted security type." },
+      "encryption": { "title": "Embedded viewer could not establish encryption", "message": "The server offered encrypted RealVNC RA2 or RA2_256, but the embedded viewer could not negotiate it. SessionDock did not downgrade to an unencrypted security type." },
       "network": { "title": "VNC network connection failed", "message": "SessionDock could not establish a TCP connection to the VNC server." },
       "protocol": { "title": "Unsupported VNC protocol", "message": "The server sent an unsupported or malformed RFB handshake." },
       "proxy": { "title": "Local VNC proxy failed", "message": "SessionDock could not establish the protected local viewer bridge." },

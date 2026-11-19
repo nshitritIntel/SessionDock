@@ -26,7 +26,7 @@
       "connection_refused": { "title": "חיבור VNC נדחה", "message": "המארח זמין, אך אף שרת VNC לא קיבל את החיבור ביציאה שהוגדרה." },
       "connection_timeout": { "title": "תם הזמן לחיבור VNC", "message": "שרת ה-VNC לא הגיב לפני תום זמן החיבור." },
       "dns": { "title": "שם מארח VNC לא נמצא", "message": "SessionDock לא הצליח לפתור את שם המארח שהוגדר." },
-      "encryption": { "title": "ההצפנה אינה תואמת למציג המוטמע", "message": "השרת דורש RealVNC RA2 או RA2_256 מוצפן, שאינם נתמכים ב-noVNC. SessionDock לא ישנמך לסוג אבטחה לא מוצפן." },
+      "encryption": { "title": "המציג המוטמע לא הצליח ליצור חיבור מוצפן", "message": "השרת הציע RealVNC RA2 או RA2_256 מוצפן, אך המציג המוטמע לא הצליח לנהל את ההצפנה. SessionDock לא ביצע שנמוך לסוג אבטחה לא מוצפן." },
       "network": { "title": "חיבור הרשת של VNC נכשל", "message": "SessionDock לא הצליח להקים חיבור TCP לשרת ה-VNC." },
       "protocol": { "title": "פרוטוקול VNC אינו נתמך", "message": "השרת שלח לחיצת יד של RFB שאינה נתמכת או פגומה." },
       "proxy": { "title": "מתווך VNC המקומי נכשל", "message": "SessionDock לא הצליח להקים את גשר המציג המקומי המוגן." },

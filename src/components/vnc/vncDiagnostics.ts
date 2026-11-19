@@ -23,13 +23,13 @@ const SECURITY_TYPE_NAMES: Record<number, string> = {
   2: "VNC Authentication",
   5: "RA2",
   6: "RA2ne",
-  13: "RA2_256",
-  14: "RA2ne_256",
   16: "Tight",
   19: "VeNCrypt",
   22: "XVP",
   30: "Apple Remote Desktop",
   113: "MSLogonII",
+  129: "RA2_256",
+  130: "RA2ne_256",
 };
 
 function securityTypeLabel(securityType: number): string {
@@ -62,7 +62,10 @@ export function classifyVncStartFailure(cause: unknown): VncViewerFailure {
 export function classifyVncDisconnect(diagnostics?: VncProxyDiagnostics): VncViewerFailure {
   const technicalDetails = diagnosticDetails(diagnostics);
   const offered = diagnostics?.offeredSecurityTypes ?? [];
-  if (offered.some((securityType) => securityType === 5 || securityType === 13)) {
+  const selected = diagnostics?.selectedSecurityType;
+  const encryptedRa2Offered = offered.some((securityType) => securityType === 5 || securityType === 129);
+  const encryptedRa2Selected = selected === 5 || selected === 129;
+  if (encryptedRa2Offered && !encryptedRa2Selected) {
     return { kind: "encryption", technicalDetails, externalViewerRecommended: true };
   }
   if (diagnostics?.failure?.code === "unsupported_protocol_version" || diagnostics?.failure?.code === "malformed_protocol") {
