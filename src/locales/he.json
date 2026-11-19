@@ -3,6 +3,37 @@
     "name": "SessionDock",
     "tagline": "מנהל חיבורי טרמינל"
   },
+  "vnc": {
+    "enableInput": "הפעלת קלט מרחוק",
+    "viewOnly": "צפייה בלבד",
+    "nativeSize": "הצגה בגודל מקורי",
+    "fitWorkspace": "התאמה לסביבת העבודה",
+    "disconnect": "ניתוק",
+    "connect": "התחברות",
+    "reconnect": "התחברות מחדש",
+    "openExternal": "פתיחה ב-RealVNC Viewer",
+    "credentials": "אישורי VNC",
+    "username": "שם משתמש",
+    "password": "סיסמה",
+    "verifyServer": "אימות זהות שרת VNC",
+    "verifyServerMessage": "יש לאמת את טביעת האצבע של מפתח ה-RSA מול מנהל השרת לפני ההמשך. האמון תקף לחיבור זה בלבד.",
+    "trustOnce": "מתן אמון לחיבור זה",
+    "cancel": "ביטול",
+    "technicalDetails": "פרטים טכניים",
+    "externalViewerFailed": "לא ניתן להפעיל מציג VNC חיצוני תואם.",
+    "failures": {
+      "authentication": { "title": "אימות VNC נכשל", "message": "יש לבדוק את שם המשתמש והסיסמה." },
+      "connection_refused": { "title": "חיבור VNC נדחה", "message": "המארח זמין, אך אף שרת VNC לא קיבל את החיבור ביציאה שהוגדרה." },
+      "connection_timeout": { "title": "תם הזמן לחיבור VNC", "message": "שרת ה-VNC לא הגיב לפני תום זמן החיבור." },
+      "dns": { "title": "שם מארח VNC לא נמצא", "message": "SessionDock לא הצליח לפתור את שם המארח שהוגדר." },
+      "encryption": { "title": "ההצפנה אינה תואמת למציג המוטמע", "message": "השרת דורש RealVNC RA2 או RA2_256 מוצפן, שאינם נתמכים ב-noVNC. SessionDock לא ישנמך לסוג אבטחה לא מוצפן." },
+      "network": { "title": "חיבור הרשת של VNC נכשל", "message": "SessionDock לא הצליח להקים חיבור TCP לשרת ה-VNC." },
+      "protocol": { "title": "פרוטוקול VNC אינו נתמך", "message": "השרת שלח לחיצת יד של RFB שאינה נתמכת או פגומה." },
+      "proxy": { "title": "מתווך VNC המקומי נכשל", "message": "SessionDock לא הצליח להקים את גשר המציג המקומי המוגן." },
+      "remote_disconnect": { "title": "שרת VNC התנתק", "message": "השרת המרוחק סגר את החיבור לפני השלמת אתחול שולחן העבודה." },
+      "unsupported_security": { "title": "אבטחת VNC אינה נתמכת", "message": "השרת דורש מנגנון אבטחה שאינו נתמך במציג המוטמע." }
+    }
+  },
   "sidebar": {
     "search": "חיפוש חיבורים...",
     "home": "בית",

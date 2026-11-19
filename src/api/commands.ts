@@ -139,6 +139,18 @@ export async function startVncProxy(host: string, port: number): Promise<{ id: s
   return nativeInvoke("start_vnc_proxy", { host, port });
 }
 
+export interface VncProxyDiagnostics {
+  stage: "tcp_connected" | "web_socket_handshake" | "protocol_version" | "security_negotiation" | "authentication";
+  serverProtocolVersion?: string;
+  offeredSecurityTypes: number[];
+  selectedSecurityType?: number;
+  failure?: { code: string; message: string };
+}
+
+export async function getVncProxyDiagnostics(id: string): Promise<VncProxyDiagnostics> {
+  return nativeInvoke("get_vnc_proxy_diagnostics", { id });
+}
+
 export async function stopVncProxy(id: string): Promise<void> {
   return nativeInvoke("stop_vnc_proxy", { id });
 }

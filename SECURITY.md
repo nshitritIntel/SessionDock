@@ -161,6 +161,15 @@ User-created terminal logs are a separate, explicitly enabled feature. They cont
 - Sensitive query values are redacted in the UI and omitted from SQLite, JSON, and CSV.
 - Embedded certificate verification is never disabled globally or per application WebView.
 
+### Embedded VNC
+
+- The local WebSocket listener binds only to `127.0.0.1`, requires an unguessable session path token and an approved SessionDock WebView origin, and accepts binary frames only.
+- Every proxy has an explicit owner and concurrency limit. Stopping it aborts its listener and active bridge tasks; rejected handshakes cannot consume the preflight remote connection.
+- RFB diagnostics inspect only bounded protocol banners and numeric security-type metadata. Authentication payloads, passwords, cryptographic secrets, and framebuffer data are not retained, logged, persisted, or exported.
+- RSA server identity verification requires explicit approval of a SHA-256 fingerprint for each connection. SessionDock does not automatically approve or persist an unverified server key.
+- noVNC 1.7.0 does not implement full-session encrypted RealVNC RA2 or RA2_256. SessionDock blocks fallback from advertised encrypted RA2 modes to unencrypted RA2ne and directs the user to a compatible external viewer.
+- SessionDock never changes VNC server authentication or encryption policy and never represents the external-viewer fallback as an embedded connection.
+
 ### Data Privacy
 
 - No analytics

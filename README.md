@@ -6,7 +6,7 @@ A modern desktop application for managing SSH, Telnet, Serial, BMC, and VNC remo
 
 Built for network engineers, data-center technicians, system administrators, and IT professionals who manage hundreds or thousands of network devices.
 
-![Version](https://img.shields.io/badge/version-2.0.2-blue)
+![Version](https://img.shields.io/badge/version-2.0.3-blue)
 ![Platform](https://img.shields.io/badge/release-Windows%20x64-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -152,7 +152,9 @@ The monitor worker starts with SessionDock and uses an exclusive lock so only on
 - BMC remote pages receive no SessionDock capability or privileged IPC access; popup creation is denied and navigation is limited to HTTP(S)
 - Token-, ticket-, and session-bearing console URLs are available ephemerally but omitted from persistence and export
 - Embedded BMC certificate validation remains enabled; SessionDock never applies a global TLS bypass
-- VNC WebSockets bind only to `127.0.0.1`, require an unguessable path token and an approved SessionDock WebView origin, and accept binary frames only
+- VNC WebSockets bind only to `127.0.0.1`, require an unguessable path token and an approved SessionDock WebView origin, accept binary frames only, and close active bridge tasks with their owning proxy
+- VNC protocol diagnostics retain only bounded handshake metadata; credentials, authentication payloads, and framebuffer traffic are never logged or persisted
+- Embedded VNC never skips advertised encrypted RealVNC RA2 modes in favor of unencrypted RA2ne
 - The main WebView applies a restrictive Content Security Policy that permits Tauri IPC/assets and explicitly scoped loopback development and VNC connections
 - Monitor definitions contain provider and monitor identifiers rather than executable commands; collected data is bounded provider JSON and derived interface state, never credential material
 
@@ -161,6 +163,16 @@ The monitor worker starts with SessionDock and uses an exclusive lock so only on
 - Vendor consoles that require Java applets, native browser extensions, or unrestricted popup windows may need External Browser mode.
 - The "ignore TLS errors" preference applies only to the explicit connection diagnostic request. Tauri/WebView2 does not expose a safe per-child-WebView certificate bypass, so embedded consoles continue to validate certificates.
 - Tab cookie isolation uses the platform WebView's incognito support. Behavior depends on the installed WebView2/WKWebView version.
+
+### VNC security compatibility
+
+The embedded viewer uses noVNC 1.7.0. The Rust bridge transports RFB bytes unchanged and cannot add encryption to a security mechanism that the viewer does not implement.
+
+- Standard RFB, VNC Authentication, Tight, XVP, Apple Remote Desktop, and MSLogonII are handled according to noVNC's capabilities. Some of these mechanisms do not provide full-session encryption.
+- noVNC supports RealVNC RA2ne type 6 for RSA/AES-protected authentication, with explicit server-key approval in SessionDock. RA2ne does not encrypt the subsequent desktop session and is not accepted as a substitute when the server advertises encrypted RA2.
+- RealVNC RA2 type 5, RA2_256 type 13, RA2ne_256 type 14, and VeNCrypt TLS/X.509 subtypes are not implemented by noVNC 1.7.0.
+- RealVNC Server with `Authentication=SystemAuth` and `Encryption=AlwaysOn` requires a compatible encrypted RealVNC security type. SessionDock reports that incompatibility and offers the installed RealVNC Viewer; it never disables encryption or changes server settings.
+- Interoperability with an authorized RealVNC `SystemAuth + AlwaysOn` test server remains a pending acceptance test. The embedded viewer must not be described as compatible until an engine with verified RA2 or RA2_256 support is integrated and tested.
 
 ## Tech Stack
 
@@ -185,7 +197,7 @@ The monitor worker starts with SessionDock and uses an exclusive lock so only on
 
 ### Windows
 
-Download `SessionDock_2.0.2_x64-setup.exe` from the [v2.0.2 GitHub release](https://github.com/nshitritIntel/SessionDock/releases/tag/v2.0.2) and run it. The NSIS installer will:
+Download `SessionDock_2.0.3_x64-setup.exe` from the [v2.0.3 GitHub release](https://github.com/nshitritIntel/SessionDock/releases/tag/v2.0.3) and run it. The NSIS installer will:
 
 - Install to Program Files
 - Create a Start Menu shortcut
@@ -226,7 +238,7 @@ npm run dev
 
 # Or manually:
 npx tauri build
-# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.2_x64-setup.exe
+# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.3_x64-setup.exe
 ```
 
 > **Intel network users:** The build script automatically sets the proxy (`proxy-iil.intel.com:912`). If you're on a different network, remove the proxy lines from `build.ps1`.

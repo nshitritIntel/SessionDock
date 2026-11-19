@@ -24,7 +24,7 @@ node -e "const fs=require('fs');const t=JSON.parse(fs.readFileSync('src-tauri/ta
 # Cargo.toml package version (dependency versions may appear inline)
 $cargoPath = "src-tauri\Cargo.toml"
 $cargo = Get-Content $cargoPath -Raw
-$cargo = $cargo -replace '(?m)^version = "\d+\.\d+\.\d+"$', "version = `"$Version`""
+$cargo = $cargo -replace '(?m)^version = "\d+\.\d+\.\d+"(?=\r?$)', "version = `"$Version`""
 [System.IO.File]::WriteAllText("$PWD\$cargoPath", $cargo)
 Write-Host "  Cargo.toml: $Version"
 
