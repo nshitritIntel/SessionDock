@@ -1,6 +1,6 @@
 #[cfg(target_os = "windows")]
 const UPDATE_ENDPOINT: &str =
-    "https://github.com/Nave1/SessionDock/releases/latest/download/latest.json";
+    "https://github.com/nshitritIntel/SessionDock/releases/latest/download/latest.json";
 
 pub fn configure() {
     #[cfg(target_os = "windows")]

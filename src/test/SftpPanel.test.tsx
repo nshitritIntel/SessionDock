@@ -177,6 +177,38 @@ describe("SftpPanel", () => {
     }));
   });
 
+  it("moves a remote file into a remote folder with the WebView2 drag fallback", async () => {
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "list_local_directory") return { path: "C:\\downloads", entries: [] };
+      if (command === "list_sftp_directory") return [
+        { name: "archive", path: "/archive", kind: "directory" },
+        { name: "switch.cfg", path: "/switch.cfg", kind: "file", size: 128 },
+      ];
+      return undefined;
+    });
+    render(<SftpPanel tabId="pane-remote-move" onClose={vi.fn()} />);
+
+    const payloads = new Map<string, string>();
+    fireEvent.dragStart((await screen.findByText("switch.cfg")).closest("button")!, {
+      dataTransfer: {
+        effectAllowed: "none",
+        setData: (type: string, value: string) => payloads.set(type, value),
+      },
+    });
+    expect(payloads.has("text/plain")).toBe(true);
+
+    const remoteFolder = screen.getByText("archive").closest("button")!;
+    const dropTransfer = { types: ["text/plain"], dropEffect: "none", getData: () => "" };
+    fireEvent.dragOver(remoteFolder, { dataTransfer: dropTransfer });
+    fireEvent.drop(remoteFolder, { dataTransfer: dropTransfer });
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("rename_sftp_entry", {
+      tabId: "pane-remote-move",
+      sourcePath: "/switch.cfg",
+      destinationPath: "/archive/switch.cfg",
+    }));
+  });
+
   it("downloads a remote file dropped onto the local pane", async () => {
     mocks.invoke.mockImplementation(async (command: string) => {
       if (command === "list_local_directory") return { path: "C:\\downloads", entries: [] };

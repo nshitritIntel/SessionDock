@@ -160,6 +160,7 @@ export interface MonitorDefinition {
   host: string;
   providerId: "arista-eos";
   monitorKind: "interfaces";
+  interfaceName?: string;
   displayName: string;
   intervalSeconds: number;
   retentionHours: number;
@@ -177,8 +178,22 @@ export interface MonitorSample {
   observedAt: string;
   status: "healthy" | "warning" | "critical" | "unknown" | "failed";
   durationMs: number;
-  summary: { interfaceCount?: number; downCount?: number; errorCount?: number };
+  summary: { interfaceCount?: number; downCount?: number; errorCount?: number; logCount?: number };
   error?: string;
+}
+
+export interface MonitorSampleDetail {
+  sample: MonitorSample;
+  interfaces: Array<{
+    name: string;
+    adminStatus?: string;
+    operStatus?: string;
+    inputErrors?: number;
+    outputErrors?: number;
+    inputDiscards?: number;
+    outputDiscards?: number;
+  }>;
+  rawOutput?: string;
 }
 
 export interface MonitorIncident {
@@ -224,6 +239,7 @@ export async function createMonitorDefinition(request: {
   sessionId: string;
   providerId: "arista-eos";
   monitorKind: "interfaces";
+  interfaceName: string;
   displayName: string;
   intervalSeconds: number;
   retentionHours: number;
@@ -249,6 +265,10 @@ export async function runMonitorNow(id: string): Promise<MonitorDefinition> {
 
 export async function getMonitorSamples(monitorId: string, limit = 100): Promise<MonitorSample[]> {
   return nativeInvoke("get_monitor_samples", { monitorId, limit });
+}
+
+export async function getMonitorSampleDetail(sampleId: number): Promise<MonitorSampleDetail> {
+  return nativeInvoke("get_monitor_sample_detail", { sampleId });
 }
 
 export async function getMonitorIncidents(includeResolved = false): Promise<MonitorIncident[]> {

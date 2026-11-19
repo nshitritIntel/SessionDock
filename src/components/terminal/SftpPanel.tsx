@@ -204,18 +204,41 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
     });
   };
 
-  const acceptLocalFileDrag = (event: DragEvent<HTMLElement>) => {
-    if (!hasFileDragType(event.dataTransfer, LOCAL_FILE_DRAG_TYPE)) return;
+  const acceptRemoteDestinationDrag = (event: DragEvent<HTMLElement>) => {
+    const isLocalUpload = hasFileDragType(event.dataTransfer, LOCAL_FILE_DRAG_TYPE);
+    const isRemoteMove = hasFileDragType(event.dataTransfer, REMOTE_FILE_DRAG_TYPE);
+    if (!isLocalUpload && !isRemoteMove) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = "copy";
+    event.dataTransfer.dropEffect = isRemoteMove ? "move" : "copy";
     setRemoteDropActive(true);
   };
 
-  const dropLocalFile = (event: DragEvent<HTMLElement>, destinationDirectory: string) => {
+  const moveRemoteItems = async (items: FileDragItem[], destinationDirectory: string) => {
+    try {
+      for (const item of items) {
+        const destinationPath = joinRemotePath(destinationDirectory, fileName(item.path));
+        if (destinationPath === item.path) continue;
+        if (item.kind === "directory" && (destinationDirectory === item.path || destinationDirectory.startsWith(`${item.path}/`))) {
+          throw new Error(t("sftp.invalidMove"));
+        }
+        await nativeInvoke("rename_sftp_entry", { tabId, sourcePath: item.path, destinationPath });
+      }
+      await loadDirectory(path);
+    } catch (operationError) {
+      addToast("error", String(operationError));
+    }
+  };
+
+  const dropRemoteDestination = (event: DragEvent<HTMLElement>, destinationDirectory: string) => {
     event.preventDefault();
-    const file = readFileDragPayload(event.dataTransfer, LOCAL_FILE_DRAG_TYPE);
+    const remoteFile = readFileDragPayload(event.dataTransfer, REMOTE_FILE_DRAG_TYPE);
+    const localFile = remoteFile ? undefined : readFileDragPayload(event.dataTransfer, LOCAL_FILE_DRAG_TYPE);
     clearFileDragPayload();
-    if (file) void uploadItems(file.items ?? [{ name: file.name, path: file.path, kind: file.kind ?? "file" }], destinationDirectory);
+    if (remoteFile) {
+      void moveRemoteItems(remoteFile.items ?? [{ name: remoteFile.name, path: remoteFile.path, kind: remoteFile.kind ?? "file" }], destinationDirectory);
+    } else if (localFile) {
+      void uploadItems(localFile.items ?? [{ name: localFile.name, path: localFile.path, kind: localFile.kind ?? "file" }], destinationDirectory);
+    }
   };
 
   const selectRemoteEntry = (entry: SftpEntry, event: MouseEvent) => {
@@ -319,10 +342,10 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
             role="listbox"
             aria-label={t("sftp.remoteFiles")}
             onDragEnter={(event) => {
-              acceptLocalFileDrag(event);
+              acceptRemoteDestinationDrag(event);
               remoteDropDepth.current += 1;
             }}
-            onDragOver={acceptLocalFileDrag}
+            onDragOver={acceptRemoteDestinationDrag}
             onDragLeave={() => {
               remoteDropDepth.current = Math.max(0, remoteDropDepth.current - 1);
               if (remoteDropDepth.current === 0) setRemoteDropActive(false);
@@ -330,7 +353,7 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
             onDrop={(event) => {
               remoteDropDepth.current = 0;
               setRemoteDropActive(false);
-              dropLocalFile(event, path);
+              dropRemoteDestination(event, path);
             }}
           >
             {remoteDropActive && <div className="pointer-events-none sticky top-0 z-10 bg-dock-accent px-2 py-1 text-center text-[10px] font-medium text-white">{t("sftp.dropToUpload")}</div>}
@@ -346,12 +369,12 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
               }} onDragEnd={clearFileDragPayload} onDragEnter={(event) => {
                 if (entry.kind !== "directory") return;
                 event.stopPropagation();
-                acceptLocalFileDrag(event);
+                acceptRemoteDestinationDrag(event);
                 remoteDropDepth.current += 1;
               }} onDragOver={(event) => {
                 if (entry.kind !== "directory") return;
                 event.stopPropagation();
-                acceptLocalFileDrag(event);
+                acceptRemoteDestinationDrag(event);
               }} onDragLeave={(event) => {
                 if (entry.kind !== "directory") return;
                 event.stopPropagation();
@@ -362,7 +385,7 @@ export function SftpPanel({ tabId, onClose, initialTransferProtocol = "sftp" }: 
                 event.stopPropagation();
                 remoteDropDepth.current = 0;
                 setRemoteDropActive(false);
-                dropLocalFile(event, entry.path);
+                dropRemoteDestination(event, entry.path);
               }} onClick={(event) => selectRemoteEntry(entry, event)} onDoubleClick={() => entry.kind === "directory" ? void loadDirectory(entry.path) : setSelectedPaths([entry.path])} className={`w-full h-8 px-2 grid grid-cols-[18px_minmax(0,1fr)_70px] items-center gap-1 text-start border-b border-dock-border/40 hover:bg-dock-surface-hover focus:outline-none focus:bg-dock-surface-hover ${selectedPaths.includes(entry.path) ? "bg-dock-surface" : ""}`}>
                 {entry.kind === "directory" ? <Folder size={14} className="text-amber-400" /> : <File size={14} className="text-dock-text-muted" />}
                 <span className="truncate text-[11px] text-dock-text" dir="auto" title={entry.name}>{entry.name}</span>

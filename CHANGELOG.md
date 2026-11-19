@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - 2026-11-19
+
+### Changed
+
+- Scope every new Arista Network Health monitor to one explicit interface and collect only that interface's JSON state plus matching recent log lines
+- Show interface scope, error and log counts, retained raw sample output, and a clear explanation of baseline snapshots in Network Health
+- Pause legacy whole-switch monitors during migration; recreate them with an explicit interface to resume monitoring
+
+### Fixed
+
+- Open and resolve incidents for nonzero interface error or discard counters in addition to link-down state
+- Move remote SFTP files and folders into remote folders by drag and drop, including the Windows WebView2 drag fallback
+- Use the current saved VNC host and port when reconnecting an already-open or restored tab after editing its session
+- Resolve Windows updater proxy settings against the current SessionDock GitHub release endpoint
+
+### Security
+
+- Validate and bound interface names before constructing fixed read-only EOS commands, rejecting separators, option-like values, and traversal-like tokens
+- Keep remote SFTP moves behind the existing normalized-path rename IPC and reject directory self or descendant moves
+
 ## [2.0.1] - 2026-11-18
 
 ### Fixed

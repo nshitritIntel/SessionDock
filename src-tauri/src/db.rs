@@ -130,9 +130,17 @@ impl Database {
             )?;
         }
 
+        if current_version < 11 {
+            conn.execute_batch(include_str!("migrations/011_monitor_interface_scope.sql"))?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![11],
+            )?;
+        }
+
         log::info!(
             "Database migrations complete. Version: {}",
-            std::cmp::max(current_version, 10)
+            std::cmp::max(current_version, 11)
         );
         Ok(())
     }
@@ -242,7 +250,7 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
         );
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM session_jump_hosts", [], |row| row
@@ -393,7 +401,16 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            10
+            11
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT enabled FROM monitor_definitions WHERE id = 'monitor-1'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            0
         );
 
         drop(conn);

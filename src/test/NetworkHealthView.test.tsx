@@ -28,6 +28,7 @@ const monitor = {
   host: "192.0.2.10",
   providerId: "arista-eos",
   monitorKind: "interfaces",
+  interfaceName: "Ethernet15",
   displayName: "Leaf interfaces",
   intervalSeconds: 300,
   retentionHours: 168,
@@ -45,7 +46,7 @@ const sample = {
   observedAt: "2026-04-01T10:00:00Z",
   status: "healthy",
   durationMs: 120,
-  summary: { interfaceCount: 48, downCount: 0, errorCount: 0 },
+  summary: { interfaceCount: 1, downCount: 0, errorCount: 0, logCount: 2 },
 };
 
 describe("NetworkHealthView", () => {
@@ -63,6 +64,12 @@ describe("NetworkHealthView", () => {
           return Promise.resolve([sample]);
         case "get_monitor_baselines":
           return Promise.resolve([]);
+        case "get_monitor_sample_detail":
+          return Promise.resolve({
+            sample,
+            interfaces: [],
+            rawOutput: "Relevant recent logs:\nEthernet15 link status changed",
+          });
         case "run_monitor_now":
           return Promise.resolve(monitor);
         default:
@@ -75,6 +82,7 @@ describe("NetworkHealthView", () => {
     render(<NetworkHealthView />);
 
     expect(await screen.findByText("Leaf interfaces")).toBeInTheDocument();
+    expect(screen.getByText(/Ethernet15/)).toBeInTheDocument();
     expect(screen.getAllByText("healthy").length).toBeGreaterThan(0);
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("get_monitor_samples", {
@@ -82,6 +90,10 @@ describe("NetworkHealthView", () => {
         limit: 48,
       }),
     );
+
+    fireEvent.click(screen.getByTitle("monitoring.viewSample"));
+    expect(await screen.findByText(/Ethernet15 link status changed/)).toBeInTheDocument();
+    expect(mocks.invoke).toHaveBeenCalledWith("get_monitor_sample_detail", { sampleId: sample.id });
 
     fireEvent.click(screen.getByTitle("monitoring.runNow"));
 
@@ -97,5 +109,8 @@ describe("NetworkHealthView", () => {
         ),
       ).toHaveLength(2),
     );
+
+    fireEvent.click(screen.getByText("monitoring.tabs.baselines"));
+    expect(screen.getByText("monitoring.baselineHelp")).toBeInTheDocument();
   });
 });

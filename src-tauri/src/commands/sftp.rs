@@ -420,6 +420,25 @@ pub async fn create_sftp_directory(
     .await
 }
 
+fn validate_remote_rename_paths(
+    source_path: &str,
+    destination_path: &str,
+) -> Result<(String, String), AppError> {
+    let source_path = normalize_remote_path(source_path)?;
+    let destination_path = normalize_remote_path(destination_path)?;
+    if source_path == "/" || destination_path == "/" {
+        return Err(AppError::Validation(
+            "Cannot rename the remote root".to_string(),
+        ));
+    }
+    if source_path == destination_path || destination_path.starts_with(&format!("{source_path}/")) {
+        return Err(AppError::Validation(
+            "Cannot move a remote entry into itself".to_string(),
+        ));
+    }
+    Ok((source_path, destination_path))
+}
+
 #[tauri::command]
 pub async fn rename_sftp_entry(
     manager: State<'_, NativeSshManager>,
@@ -427,13 +446,8 @@ pub async fn rename_sftp_entry(
     source_path: String,
     destination_path: String,
 ) -> Result<(), AppError> {
-    let source_path = normalize_remote_path(&source_path)?;
-    let destination_path = normalize_remote_path(&destination_path)?;
-    if source_path == "/" || destination_path == "/" {
-        return Err(AppError::Validation(
-            "Cannot rename the remote root".to_string(),
-        ));
-    }
+    let (source_path, destination_path) =
+        validate_remote_rename_paths(&source_path, &destination_path)?;
     with_sftp(&manager, &tab_id, |sftp| async move {
         retry_sftp(|| sftp.rename(Path::new(&source_path), Path::new(&destination_path), None))
             .await
@@ -1263,8 +1277,9 @@ pub async fn cancel_sftp_transfer(
 mod tests {
     use super::{
         collect_local_tree, entry_kind, join_remote_path, normalize_remote_path, remote_name,
-        set_transfer_state, validate_local_download, validate_local_upload, SftpTransferManager,
-        TransferJob, TRANSFER_CANCELLED, TRANSFER_PAUSED, TRANSFER_RUNNING,
+        set_transfer_state, validate_local_download, validate_local_upload,
+        validate_remote_rename_paths, SftpTransferManager, TransferJob, TRANSFER_CANCELLED,
+        TRANSFER_PAUSED, TRANSFER_RUNNING,
     };
     use ssh2::FileStat;
     use std::path::Path;
@@ -1298,6 +1313,21 @@ mod tests {
         assert!(remote_name(Path::new(".")).is_err());
         assert_eq!(join_remote_path("/", "home"), "/home");
         assert_eq!(join_remote_path("/srv", "home"), "/srv/home");
+    }
+
+    #[test]
+    fn rejects_remote_self_and_descendant_renames() {
+        assert!(validate_remote_rename_paths("/configs", "/configs").is_err());
+        assert!(validate_remote_rename_paths("/configs", "/configs/archive").is_err());
+        assert!(validate_remote_rename_paths("/", "/archive").is_err());
+        assert_eq!(
+            validate_remote_rename_paths("/switch.cfg", "/archive/switch.cfg").unwrap(),
+            ("/switch.cfg".into(), "/archive/switch.cfg".into())
+        );
+        assert_eq!(
+            validate_remote_rename_paths("/configs", "/configs-old").unwrap(),
+            ("/configs".into(), "/configs-old".into())
+        );
     }
 
     #[test]
