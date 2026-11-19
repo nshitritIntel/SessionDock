@@ -198,6 +198,7 @@ pub fn run() {
             commands::bmc::test_bmc_connection,
             commands::vnc::launch_vnc_viewer,
             commands::vnc::start_vnc_proxy,
+            commands::vnc::get_vnc_proxy_diagnostics,
             commands::vnc::stop_vnc_proxy,
             stop_monitor_worker_for_update,
             restart_monitor_worker_after_update_failure,

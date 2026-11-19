@@ -3,6 +3,37 @@
     "name": "SessionDock",
     "tagline": "Terminal Session Manager"
   },
+  "vnc": {
+    "enableInput": "Enable remote input",
+    "viewOnly": "View only",
+    "nativeSize": "Show at native size",
+    "fitWorkspace": "Fit to workspace",
+    "disconnect": "Disconnect",
+    "connect": "Connect",
+    "reconnect": "Reconnect",
+    "openExternal": "Open in RealVNC Viewer",
+    "credentials": "VNC credentials",
+    "username": "Username",
+    "password": "Password",
+    "verifyServer": "Verify VNC server identity",
+    "verifyServerMessage": "Confirm this RSA key fingerprint with the server administrator before continuing. Trust applies to this connection only.",
+    "trustOnce": "Trust for this connection",
+    "cancel": "Cancel",
+    "technicalDetails": "Technical details",
+    "externalViewerFailed": "A compatible external VNC viewer could not be launched.",
+    "failures": {
+      "authentication": { "title": "VNC authentication failed", "message": "Verify your username and password." },
+      "connection_refused": { "title": "VNC connection refused", "message": "The host is reachable, but no VNC server accepted the configured port." },
+      "connection_timeout": { "title": "VNC connection timed out", "message": "The VNC server did not respond before the connection timeout." },
+      "dns": { "title": "VNC hostname not found", "message": "SessionDock could not resolve the configured VNC hostname." },
+      "encryption": { "title": "Embedded viewer encryption is incompatible", "message": "The server requires encrypted RealVNC RA2 or RA2_256, which noVNC does not support. SessionDock will not downgrade to an unencrypted security type." },
+      "network": { "title": "VNC network connection failed", "message": "SessionDock could not establish a TCP connection to the VNC server." },
+      "protocol": { "title": "Unsupported VNC protocol", "message": "The server sent an unsupported or malformed RFB handshake." },
+      "proxy": { "title": "Local VNC proxy failed", "message": "SessionDock could not establish the protected local viewer bridge." },
+      "remote_disconnect": { "title": "VNC server disconnected", "message": "The remote server closed the connection before desktop initialization completed." },
+      "unsupported_security": { "title": "Unsupported VNC security", "message": "The server requires a security mechanism that is not supported by the embedded viewer." }
+    }
+  },
   "sidebar": {
     "search": "Search sessions...",
     "home": "Home",

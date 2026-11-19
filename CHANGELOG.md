@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.3] - 2026-11-19
+
+### Added
+
+- Add metadata-only RFB diagnostics for protocol version, advertised security types, selected security type, and connection stage
+- Add actionable VNC errors for DNS, TCP refusal and timeout, proxy handshake, protocol, authentication, encryption, unsupported security, and remote disconnect failures
+- Require explicit per-connection approval of the SHA-256 RSA server-key fingerprint when noVNC requests server verification
+
+### Fixed
+
+- Preserve authentication failures instead of replacing them with a generic unexpected-disconnect message
+- Close active TCP and WebSocket bridge tasks when their owning VNC proxy stops
+- Prevent rejected local WebSocket requests from consuming the verified remote TCP connection
+
+### Security
+
+- Block noVNC from skipping advertised encrypted RealVNC RA2 or RA2_256 modes in favor of unencrypted RA2ne
+- Keep RFB diagnostics limited to bounded handshake metadata; authentication payloads, credentials, and framebuffer data are neither retained nor logged
+- Bound embedded VNC proxy concurrency and malformed handshake metadata while preserving loopback binding, origin checks, and session tokens
+- Identify RealVNC `SystemAuth + AlwaysOn` as unsupported by the embedded noVNC engine and offer the compatible external viewer without changing server security settings
+
 ## [2.0.2] - 2026-11-19
 
 ### Changed

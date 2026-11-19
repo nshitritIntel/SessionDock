@@ -16,6 +16,7 @@ declare module "@novnc/novnc" {
     showDotCursor: boolean;
     qualityLevel: number;
     compressionLevel: number;
+    approveServer(): void;
     disconnect(): void;
     focus(): void;
     sendCredentials(credentials: RfbCredentials): void;
@@ -23,5 +24,6 @@ declare module "@novnc/novnc" {
     addEventListener(type: "disconnect", listener: (event: CustomEvent<{ clean: boolean }>) => void): void;
     addEventListener(type: "credentialsrequired", listener: (event: CustomEvent<{ types: string[] }>) => void): void;
     addEventListener(type: "securityfailure", listener: (event: CustomEvent<{ status: number; reason?: string }>) => void): void;
+    addEventListener(type: "serververification", listener: (event: CustomEvent<{ type: string; publickey: Uint8Array }>) => void): void;
   }
 }
