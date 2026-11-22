@@ -4,6 +4,7 @@ import { AlertTriangle, ExternalLink, Eye, EyeOff, Maximize2, MonitorUp, PlugZap
 import { useTranslation } from "react-i18next";
 import { getCredentialSecret, getVncProxyDiagnostics, launchVncViewer, startVncProxy, stopVncProxy } from "../../api/commands";
 import { type TerminalTab, useAppStore } from "../../stores/appStore";
+import { useSessionStore } from "../../stores/sessionStore";
 import type { Session } from "../../types";
 import { classifyVncDisconnect, classifyVncStartFailure, type VncViewerFailure } from "./vncDiagnostics";
 
@@ -30,9 +31,14 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
   const [credentialsRequired, setCredentialsRequired] = useState(false);
   const [username, setUsername] = useState(tab.username ?? session?.username ?? "");
   const [password, setPassword] = useState("");
+  const [credentialProfileId, setCredentialProfileId] = useState(tab.credentialProfileId ?? session?.credential_profile_id ?? "");
+  const [credentialError, setCredentialError] = useState("");
+  const [submittingCredentials, setSubmittingCredentials] = useState(false);
   const [viewOnly, setViewOnly] = useState(false);
   const [scaled, setScaled] = useState(true);
   const updateTabStatus = useAppStore((state) => state.updateTabStatus);
+  const credentials = useSessionStore((state) => state.credentials);
+  const passwordCredentials = credentials.filter((credential) => credential.authentication_method === "password");
   const host = session?.host ?? tab.host;
   const port = session?.port ?? tab.port ?? 5900;
 
@@ -46,6 +52,8 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
     }
     connectingRef.current = false;
     setPassword("");
+    setCredentialError("");
+    setSubmittingCredentials(false);
     setCredentialsRequired(false);
     setServerVerification(undefined);
     updateTabStatus(tab.id, "disconnected");
@@ -63,8 +71,13 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
       const proxy = await startVncProxy(host, port);
       proxyIdRef.current = proxy.id;
       let secret = tab.password ?? "";
+      let connectionUsername = username;
       const credentialProfileId = tab.credentialProfileId ?? session?.credential_profile_id;
-      if (!secret && credentialProfileId) secret = (await getCredentialSecret(credentialProfileId)) ?? "";
+      if (!secret && credentialProfileId) {
+        secret = (await getCredentialSecret(credentialProfileId)) ?? "";
+        const credential = passwordCredentials.find((item) => item.id === credentialProfileId);
+        if (credential) connectionUsername = credential.username;
+      }
       if (tab.password) {
         useAppStore.setState((state) => ({
           tabs: state.tabs.map((current) => current.id === tab.id ? { ...current, password: undefined } : current),
@@ -72,7 +85,7 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
       }
       const rfb = new RFB(targetRef.current, proxy.url, {
         shared: true,
-        credentials: secret ? { username, password: secret } : undefined,
+        credentials: secret ? { username: connectionUsername, password: secret } : undefined,
       });
       secret = "";
       rfb.scaleViewport = scaled;
@@ -88,6 +101,7 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
       });
       rfb.addEventListener("credentialsrequired", () => {
         connectingRef.current = false;
+        setCredentialError("");
         setCredentialsRequired(true);
       });
       rfb.addEventListener("securityfailure", (event) => {
@@ -112,6 +126,8 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
         connectingRef.current = false;
         rfbRef.current = undefined;
         setPassword("");
+        setCredentialError("");
+        setSubmittingCredentials(false);
         setCredentialsRequired(false);
         setServerVerification(undefined);
         const proxyId = proxyIdRef.current;
@@ -152,13 +168,38 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
     if (proxyIdRef.current) void stopVncProxy(proxyIdRef.current).catch(() => undefined);
   }, []);
 
-  const submitCredentials = (event: React.FormEvent) => {
+  const submitCredentials = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!password || !rfbRef.current) return;
-    rfbRef.current.sendCredentials({ username, password });
-    setPassword("");
-    setCredentialsRequired(false);
-    connectingRef.current = true;
+    if (!rfbRef.current || submittingCredentials) return;
+    setCredentialError("");
+    setSubmittingCredentials(true);
+    let submittedPassword = password;
+    let submittedUsername = username;
+    try {
+      if (credentialProfileId) {
+        const credential = passwordCredentials.find((item) => item.id === credentialProfileId);
+        if (!credential) throw new Error(t("vnc.credentialUnavailable"));
+        submittedUsername = credential.username;
+        submittedPassword = (await getCredentialSecret(credential.id)) ?? "";
+        if (!submittedPassword) {
+          setCredentialError(t("vnc.credentialUnavailable"));
+          return;
+        }
+      }
+      if (!submittedPassword) {
+        setCredentialError(t("vnc.passwordRequired"));
+        return;
+      }
+      rfbRef.current.sendCredentials({ username: submittedUsername, password: submittedPassword });
+      setPassword("");
+      setCredentialsRequired(false);
+      connectingRef.current = true;
+    } catch {
+      setCredentialError(t("vnc.credentialUnavailable"));
+    } finally {
+      submittedPassword = "";
+      setSubmittingCredentials(false);
+    }
   };
 
   const approveServer = () => {
@@ -194,9 +235,31 @@ export function VncViewerView({ tab, session, active }: { tab: TerminalTab; sess
           <form onSubmit={submitCredentials} className="absolute inset-0 flex items-center justify-center bg-black/80 p-5">
             <div className="w-full max-w-sm rounded-md border border-dock-border bg-dock-surface p-4">
               <h2 className="mb-3 text-sm font-semibold text-dock-text">{t("vnc.credentials")}</h2>
-              <label className="mb-2 block text-[11px] text-dock-text-muted">{t("vnc.username")}<input autoComplete="username" value={username} onChange={(event) => setUsername(event.target.value)} className="form-input mt-1 w-full" /></label>
-              <label className="block text-[11px] text-dock-text-muted">{t("vnc.password")}<input autoFocus required autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="form-input mt-1 w-full" /></label>
-              <button className="mt-3 w-full rounded-md bg-dock-accent px-3 py-2 text-xs font-medium text-white">{t("vnc.connect")}</button>
+              <label className="mb-2 block text-[11px] text-dock-text-muted">
+                {t("vnc.credentialProfile")}
+                <select
+                  aria-label={t("vnc.credentialProfile")}
+                  value={credentialProfileId}
+                  onChange={(event) => {
+                    const nextId = event.target.value;
+                    const credential = passwordCredentials.find((item) => item.id === nextId);
+                    setCredentialProfileId(nextId);
+                    setUsername(credential?.username ?? tab.username ?? session?.username ?? "");
+                    setPassword("");
+                    setCredentialError("");
+                  }}
+                  className="form-input mt-1 w-full"
+                >
+                  <option value="">{t("vnc.enterManually")}</option>
+                  {passwordCredentials.map((credential) => <option key={credential.id} value={credential.id}>{credential.name} ({credential.username})</option>)}
+                </select>
+              </label>
+              <label className="mb-2 block text-[11px] text-dock-text-muted">{t("vnc.username")}<input autoComplete="username" disabled={Boolean(credentialProfileId)} value={username} onChange={(event) => setUsername(event.target.value)} className="form-input mt-1 w-full disabled:opacity-60" /></label>
+              {credentialProfileId
+                ? <p className="rounded border border-dock-border bg-dock-bg px-3 py-2 text-[11px] text-dock-text-muted">{t("vnc.storedPassword")}</p>
+                : <label className="block text-[11px] text-dock-text-muted">{t("vnc.password")}<input autoFocus required autoComplete="current-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="form-input mt-1 w-full" /></label>}
+              {credentialError && <p role="alert" className="mt-2 text-[11px] text-dock-error">{credentialError}</p>}
+              <button disabled={submittingCredentials} className="mt-3 w-full rounded-md bg-dock-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{t("vnc.connect")}</button>
             </div>
           </form>
         )}
