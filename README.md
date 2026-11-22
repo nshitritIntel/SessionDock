@@ -6,7 +6,7 @@ A modern desktop application for managing SSH, Telnet, Serial, BMC, and VNC remo
 
 Built for network engineers, data-center technicians, system administrators, and IT professionals who manage hundreds or thousands of network devices.
 
-![Version](https://img.shields.io/badge/version-2.0.4-blue)
+![Version](https://img.shields.io/badge/version-2.0.5-blue)
 ![Platform](https://img.shields.io/badge/release-Windows%20x64-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -197,7 +197,7 @@ The embedded viewer uses noVNC 1.7.0. The Rust bridge transports RFB bytes uncha
 
 ### Windows
 
-Download `SessionDock_2.0.4_x64-setup.exe` from the [v2.0.4 GitHub release](https://github.com/nshitritIntel/SessionDock/releases/tag/v2.0.4) and run it. The NSIS installer will:
+Download `SessionDock_2.0.5_x64-setup.exe` from the [v2.0.5 GitHub release](https://github.com/nshitritIntel/SessionDock/releases/tag/v2.0.5) and run it. The NSIS installer will:
 
 - Install to Program Files
 - Create a Start Menu shortcut
@@ -238,7 +238,7 @@ npm run dev
 
 # Or manually:
 npx tauri build
-# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.4_x64-setup.exe
+# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.5_x64-setup.exe
 ```
 
 > **Intel network users:** The build script automatically sets the proxy (`proxy-iil.intel.com:912`). If you're on a different network, remove the proxy lines from `build.ps1`.

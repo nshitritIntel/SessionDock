@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../i18n";
 import { VncViewerView } from "../components/vnc/VncViewerView";
 import { useAppStore, type TerminalTab } from "../stores/appStore";
+import { useSessionStore } from "../stores/sessionStore";
 import type { Session } from "../types";
 
-const mocks = vi.hoisted(() => ({ approveServer: vi.fn(), instances: [] as EventTarget[], invoke: vi.fn(), rfb: vi.fn() }));
+const mocks = vi.hoisted(() => ({ approveServer: vi.fn(), instances: [] as EventTarget[], invoke: vi.fn(), rfb: vi.fn(), sendCredentials: vi.fn() }));
 
 vi.mock("../api/native", () => ({ nativeInvoke: mocks.invoke }));
 vi.mock("zustand/middleware", () => ({ persist: (initializer: unknown) => initializer }));
@@ -28,7 +29,7 @@ vi.mock("@novnc/novnc", () => ({
     approveServer() { mocks.approveServer(); }
     disconnect() {}
     focus() {}
-    sendCredentials() {}
+    sendCredentials(credentials: { username?: string; password?: string }) { mocks.sendCredentials(credentials); }
   },
 }));
 
@@ -62,7 +63,9 @@ describe("VncViewerView", () => {
     mocks.approveServer.mockReset();
     mocks.instances.length = 0;
     mocks.rfb.mockReset();
+    mocks.sendCredentials.mockReset();
     useAppStore.setState({ tabs: [tab], activeTabId: tab.id, currentView: "terminal" });
+    useSessionStore.setState({ credentials: [] });
   });
 
   it("owns the native proxy for the lifetime of the VNC tab", async () => {
@@ -113,6 +116,97 @@ describe("VncViewerView", () => {
       { shared: true, credentials: { username: "", password: "temporary-secret" } },
     ));
     expect(useAppStore.getState().tabs[0].password).toBeUndefined();
+  });
+
+  it("uses both username and password from an assigned credential profile", async () => {
+    const credentialTab = { ...tab, credentialProfileId: "credential-1", username: "stale-user" };
+    useAppStore.setState({ tabs: [credentialTab] });
+    useSessionStore.setState({ credentials: [{
+      id: "credential-1",
+      name: "Lab admin",
+      username: "saved-user",
+      authentication_method: "password",
+      vault_reference: "keyring-entry",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    }] });
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "start_vnc_proxy") return Promise.resolve({ id: "33333333-3333-4333-8333-333333333333", url: "ws://127.0.0.1:49152/vnc/token" });
+      if (command === "get_credential_secret") return Promise.resolve("saved-secret");
+      return Promise.resolve(undefined);
+    });
+
+    render(<VncViewerView tab={credentialTab} active />);
+
+    await waitFor(() => expect(mocks.rfb).toHaveBeenCalledWith(
+      expect.any(HTMLDivElement),
+      "ws://127.0.0.1:49152/vnc/token",
+      { shared: true, credentials: { username: "saved-user", password: "saved-secret" } },
+    ));
+  });
+
+  it("submits a saved password credential from the VNC prompt", async () => {
+    useSessionStore.setState({ credentials: [{
+      id: "credential-1",
+      name: "Lab admin",
+      username: "saved-user",
+      authentication_method: "password",
+      vault_reference: "keyring-entry",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    }] });
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "start_vnc_proxy") return Promise.resolve({ id: "33333333-3333-4333-8333-333333333333", url: "ws://127.0.0.1:49152/vnc/token" });
+      if (command === "get_credential_secret") return Promise.resolve("saved-secret");
+      return Promise.resolve(undefined);
+    });
+    render(<VncViewerView tab={tab} active />);
+    await waitFor(() => expect(mocks.instances).toHaveLength(1));
+    mocks.instances[0].dispatchEvent(new CustomEvent("credentialsrequired", { detail: { types: ["username", "password"] } }));
+
+    fireEvent.change(await screen.findByLabelText("Credential profile"), { target: { value: "credential-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith("get_credential_secret", { id: "credential-1" }));
+    expect(mocks.sendCredentials).toHaveBeenCalledWith({ username: "saved-user", password: "saved-secret" });
+  });
+
+  it("submits manually entered credentials from the VNC prompt", async () => {
+    render(<VncViewerView tab={tab} active />);
+    await waitFor(() => expect(mocks.instances).toHaveLength(1));
+    mocks.instances[0].dispatchEvent(new CustomEvent("credentialsrequired", { detail: { types: ["username", "password"] } }));
+
+    fireEvent.change(await screen.findByLabelText("Username"), { target: { value: "manual-user" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "manual-secret" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(mocks.sendCredentials).toHaveBeenCalledWith({ username: "manual-user", password: "manual-secret" });
+  });
+
+  it("does not submit a saved credential when its keyring secret is missing", async () => {
+    useSessionStore.setState({ credentials: [{
+      id: "credential-1",
+      name: "Lab admin",
+      username: "saved-user",
+      authentication_method: "password",
+      vault_reference: "missing-entry",
+      created_at: "2026-11-22T00:00:00Z",
+      updated_at: "2026-11-22T00:00:00Z",
+    }] });
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "start_vnc_proxy") return Promise.resolve({ id: "33333333-3333-4333-8333-333333333333", url: "ws://127.0.0.1:49152/vnc/token" });
+      if (command === "get_credential_secret") return Promise.resolve(null);
+      return Promise.resolve(undefined);
+    });
+    render(<VncViewerView tab={tab} active />);
+    await waitFor(() => expect(mocks.instances).toHaveLength(1));
+    mocks.instances[0].dispatchEvent(new CustomEvent("credentialsrequired", { detail: { types: ["username", "password"] } }));
+
+    fireEvent.change(await screen.findByLabelText("Credential profile"), { target: { value: "credential-1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("The selected credential is unavailable.");
+    expect(mocks.sendCredentials).not.toHaveBeenCalled();
   });
 
   it("classifies mandatory encrypted RealVNC security and offers the compatible viewer", async () => {

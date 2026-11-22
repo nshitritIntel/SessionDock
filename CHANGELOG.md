@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.5] - 2026-11-22
+
+### Added
+
+- Let the VNC credential prompt use a saved password profile or manually entered username and password
+
+### Fixed
+
+- Use both the username and password from an assigned credential profile during automatic VNC authentication
+- Report missing keyring secrets without sending partial credentials
+
+### Security
+
+- Resolve saved VNC passwords from the operating-system keyring only when connecting, without retaining them in component state
+
 ## [2.0.4] - 2026-11-19
 
 ### Added
