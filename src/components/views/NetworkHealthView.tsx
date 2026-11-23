@@ -180,10 +180,8 @@ export function NetworkHealthView() {
     setRunningId(id);
     try {
       await runMonitorNow(id);
-      await refresh();
-      addToast("success", t("monitoring.runComplete"));
+      addToast("success", t("monitoring.runQueued"));
     } catch (error) {
-      await refresh();
       addToast("error", `${t("monitoring.runFailed")}: ${String(error)}`);
     } finally {
       setRunningId(undefined);

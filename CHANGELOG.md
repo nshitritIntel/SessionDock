@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.7] - 2026-11-23
+
+### Changed
+
+- Queue **Run Now** requests durably and return control to the Network Health workspace without waiting for SSH collection
+- Schedule recurring checks from their start time so collection duration does not extend the configured interval
+
+### Fixed
+
+- Continue polling for due monitors while earlier SSH checks are running instead of waiting for each active batch to finish
+- Preserve queued manual checks during per-session lease contention and consume them only when collection can begin
+
 ## [2.0.6] - 2026-11-23
 
 ### Added
