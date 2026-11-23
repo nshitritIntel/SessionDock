@@ -1,4 +1,5 @@
 use std::fs::OpenOptions;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +28,8 @@ pub async fn run(app_data_dir: PathBuf) -> Result<(), AppError> {
     }
 
     let database = Arc::new(Database::new(&app_data_dir.join("sessiondock.db"))?);
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_MONITORS));
+    let mut jobs = tokio::task::JoinSet::new();
     log::info!("SessionDock monitor worker started");
     loop {
         if take_shutdown_request(&app_data_dir)? {
@@ -41,7 +44,21 @@ pub async fn run(app_data_dir: PathBuf) -> Result<(), AppError> {
                 continue;
             }
         };
-        run_due_monitors(database.clone(), due_monitor_ids).await;
+        reap_finished_jobs(&mut jobs);
+        let run_database = database.clone();
+        schedule_monitor_jobs(
+            &mut jobs,
+            semaphore.clone(),
+            due_monitor_ids,
+            move |monitor_id| {
+                let database = run_database.clone();
+                async move {
+                    if let Err(error) = run_monitor_by_id(&database, &monitor_id).await {
+                        log::warn!("Monitor {monitor_id} failed: {error}");
+                    }
+                }
+            },
+        );
         if let Err(error) = crate::monitor_alerts::dispatch_pending(&database) {
             log::error!("Could not process monitor notifications: {error}");
         }
@@ -52,26 +69,34 @@ pub async fn run(app_data_dir: PathBuf) -> Result<(), AppError> {
     }
 }
 
-async fn run_due_monitors(database: Arc<Database>, monitor_ids: Vec<String>) {
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_MONITORS));
-    let mut jobs = tokio::task::JoinSet::new();
+fn schedule_monitor_jobs<F, Fut>(
+    jobs: &mut tokio::task::JoinSet<()>,
+    semaphore: Arc<tokio::sync::Semaphore>,
+    monitor_ids: Vec<String>,
+    run: F,
+) -> usize
+where
+    F: Fn(String) -> Fut + Clone + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    let mut scheduled = 0;
     for monitor_id in monitor_ids {
-        let permit = match semaphore.clone().acquire_owned().await {
+        let permit = match semaphore.clone().try_acquire_owned() {
             Ok(permit) => permit,
-            Err(error) => {
-                log::error!("Monitor concurrency limiter closed unexpectedly: {error}");
-                break;
-            }
+            Err(_) => break,
         };
-        let database = database.clone();
+        let run = run.clone();
         jobs.spawn(async move {
             let _permit = permit;
-            if let Err(error) = run_monitor_by_id(&database, &monitor_id).await {
-                log::warn!("Monitor {monitor_id} failed: {error}");
-            }
+            run(monitor_id).await;
         });
+        scheduled += 1;
     }
-    while let Some(result) = jobs.join_next().await {
+    scheduled
+}
+
+fn reap_finished_jobs(jobs: &mut tokio::task::JoinSet<()>) {
+    while let Some(result) = jobs.try_join_next() {
         if let Err(error) = result {
             log::error!("Monitor task failed unexpectedly: {error}");
         }
@@ -151,16 +176,19 @@ fn due_monitors(database: &Database) -> Result<Vec<String>, AppError> {
     let mut statement = conn.prepare(
         "SELECT m.id
          FROM monitor_definitions m
+         LEFT JOIN monitor_run_requests request ON request.monitor_id = m.id
          LEFT JOIN monitor_samples latest ON latest.id = (
              SELECT id FROM monitor_samples WHERE monitor_id = m.id ORDER BY observed_at DESC, id DESC LIMIT 1
          )
          WHERE m.enabled = 1
-           AND (latest.id IS NULL OR julianday(latest.observed_at) <= julianday('now', '-' || m.interval_seconds || ' seconds'))
+                     AND (request.monitor_id IS NOT NULL
+                                OR (m.last_started_at IS NULL AND latest.id IS NULL)
+                                OR julianday(COALESCE(m.last_started_at, latest.observed_at)) <= julianday('now', '-' || m.interval_seconds || ' seconds'))
                      AND NOT EXISTS (
                              SELECT 1 FROM monitor_run_leases lease
                              WHERE lease.session_id = m.session_id AND lease.started_at > ?1
                      )
-         ORDER BY m.updated_at, m.id
+         ORDER BY request.requested_at IS NULL, request.requested_at, m.updated_at, m.id
          LIMIT 100",
     )?;
     let ids = statement.query_map([stale_before], |row| row.get(0))?;
@@ -170,7 +198,9 @@ fn due_monitors(database: &Database) -> Result<Vec<String>, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{due_monitors, request_shutdown_inner, validate_app_data_dir};
+    use super::{
+        due_monitors, request_shutdown_inner, schedule_monitor_jobs, validate_app_data_dir,
+    };
     use crate::Database;
 
     #[test]
@@ -229,18 +259,38 @@ mod tests {
             ).unwrap();
             conn.execute(
                 "INSERT INTO monitor_definitions
-                 (id, session_id, provider_id, monitor_kind, interface_name, display_name, interval_seconds)
-                 VALUES (?1, ?2, 'cisco-ios', 'interfaces', 'GigabitEthernet1/0/1', 'WAN', 60)",
+                 (id, session_id, provider_id, monitor_kind, interface_name, display_name, interval_seconds, last_started_at)
+                 VALUES (?1, ?2, 'cisco-ios', 'interfaces', 'GigabitEthernet1/0/1', 'WAN', 60, datetime('now', '-40 seconds'))",
                 rusqlite::params![monitor_id, session_id],
             ).unwrap();
             conn.execute(
                 "INSERT INTO monitor_samples (monitor_id, observed_at, status, duration_ms)
-                 VALUES (?1, datetime('now', '-40 seconds'), 'healthy', 1)",
+                 VALUES (?1, datetime('now'), 'healthy', 40000)",
                 rusqlite::params![monitor_id],
             )
             .unwrap();
         }
         assert!(due_monitors(&db).unwrap().is_empty());
+
+        db.conn()
+            .execute(
+                "DELETE FROM monitor_run_leases WHERE session_id = ?1",
+                rusqlite::params![session_id],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "UPDATE monitor_definitions SET interval_seconds = 86400 WHERE id = ?1",
+                rusqlite::params![monitor_id],
+            )
+            .unwrap();
+        db.conn()
+            .execute(
+                "INSERT INTO monitor_run_requests (monitor_id, requested_at) VALUES (?1, ?2)",
+                rusqlite::params![monitor_id, chrono::Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        assert_eq!(due_monitors(&db).unwrap(), vec![monitor_id.clone()]);
 
         db.conn()
             .execute(
@@ -261,6 +311,36 @@ mod tests {
 
         drop(db);
         std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[tokio::test]
+    async fn scheduler_does_not_wait_for_running_monitor_jobs() {
+        let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let release = std::sync::Arc::new(tokio::sync::Notify::new());
+        let started = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut jobs = tokio::task::JoinSet::new();
+        let run_release = release.clone();
+        let run_started = started.clone();
+
+        let scheduled = schedule_monitor_jobs(
+            &mut jobs,
+            semaphore,
+            vec!["first".into(), "second".into()],
+            move |_| {
+                let release = run_release.clone();
+                let started = run_started.clone();
+                async move {
+                    started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    release.notified().await;
+                }
+            },
+        );
+
+        assert_eq!(scheduled, 1);
+        tokio::task::yield_now().await;
+        assert_eq!(started.load(std::sync::atomic::Ordering::SeqCst), 1);
+        release.notify_waiters();
+        assert!(jobs.join_next().await.unwrap().is_ok());
     }
 
     #[tokio::test]

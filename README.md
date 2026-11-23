@@ -6,7 +6,7 @@ A modern desktop application for managing SSH, Telnet, Serial, BMC, and VNC remo
 
 Built for network engineers, data-center technicians, system administrators, and IT professionals who manage hundreds or thousands of network devices.
 
-![Version](https://img.shields.io/badge/version-2.0.6-blue)
+![Version](https://img.shields.io/badge/version-2.0.7-blue)
 ![Platform](https://img.shields.io/badge/release-Windows%20x64-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -124,12 +124,12 @@ Diagnostics use backend allowlisted commands; this workspace does not accept arb
 
 1. Open **Network Health**, select a saved SSH session, and explicitly choose **Arista EOS** or **Cisco IOS / IOS-XE**.
 2. Enter one interface and choose a 30-second-to-1-hour polling interval. Monitoring always uses provider-owned read-only commands; arbitrary command text is neither stored nor executed.
-3. Review automatically refreshed health rollups, samples, matching logs, and incidents. Copy retained output, acknowledge or unacknowledge incidents, copy a successful sample as a baseline, or compare later samples with that baseline.
+3. Review automatically refreshed health rollups, samples, matching logs, and incidents. **Run Now** queues a check immediately without blocking the workspace. Copy retained output, acknowledge or unacknowledge incidents, copy a successful sample as a baseline, or compare later samples with that baseline.
 4. Add a maintenance window to suppress native notifications globally or for one session during planned work.
 
 Arista EOS uses `show interfaces <INTERFACE> | json` and `show logging | grep <INTERFACE>`. Cisco IOS/IOS-XE uses conventional `show interfaces <INTERFACE>` text and `show logging | include <INTERFACE>`. Sanitized parser fixtures cover both providers; this release was not validated against physical Cisco hardware. Cisco NX-OS, Juniper Junos, and other platforms are not yet supported and are not treated as generic Cisco IOS devices.
 
-The detached monitor worker starts with SessionDock, checks due work every second, runs up to four different saved sessions concurrently, and prevents scheduled/manual overlap for the same session. A failed collection is retained as a failed sample without deleting prior history. The worker can continue after the main window exits, but it is not registered to start at OS login; monitoring therefore does not continue across a reboot until SessionDock is started again.
+The detached monitor worker starts with SessionDock, checks due work every second even while earlier checks are running, runs up to four different saved sessions concurrently, and prevents scheduled/manual overlap for the same session. Intervals are measured between run start times so SSH collection duration does not add scheduler drift. A failed collection is retained as a failed sample without deleting prior history. The worker can continue after the main window exits, but it is not registered to start at OS login; monitoring therefore does not continue across a reboot until SessionDock is started again.
 
 ## Security
 
@@ -240,7 +240,7 @@ npm run dev
 
 # Or manually:
 npx tauri build
-# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.6_x64-setup.exe
+# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.7_x64-setup.exe
 ```
 
 > **Intel network users:** The build script automatically sets the proxy (`proxy-iil.intel.com:912`). If you're on a different network, remove the proxy lines from `build.ps1`.

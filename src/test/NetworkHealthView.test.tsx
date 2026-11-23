@@ -114,6 +114,9 @@ describe("NetworkHealthView", () => {
       intervalSeconds: 30,
     }));
 
+    const definitionRefreshesBeforeRun = mocks.invoke.mock.calls.filter(
+      ([command]) => command === "get_monitor_definitions",
+    ).length;
     fireEvent.click(screen.getByTitle("monitoring.runNow"));
 
     await waitFor(() =>
@@ -121,12 +124,13 @@ describe("NetworkHealthView", () => {
         id: monitor.id,
       }),
     );
+    expect(
+      mocks.invoke.mock.calls.filter(
+        ([command]) => command === "get_monitor_definitions",
+      ),
+    ).toHaveLength(definitionRefreshesBeforeRun);
     await waitFor(() =>
-      expect(
-        mocks.invoke.mock.calls.filter(
-          ([command]) => command === "get_monitor_definitions",
-        ),
-      ).toHaveLength(2),
+      expect(screen.getByTitle("monitoring.runNow")).not.toBeDisabled(),
     );
 
     fireEvent.click(screen.getByText("monitoring.tabs.baselines"));

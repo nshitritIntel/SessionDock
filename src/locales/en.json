@@ -620,7 +620,7 @@
     "allDevices": "All devices",
     "reason": "Maintenance reason",
     "noMaintenance": "No maintenance windows.",
-    "runComplete": "Monitor sample collected",
+    "runQueued": "Monitor check queued",
     "runFailed": "Monitor run failed",
     "loadFailed": "Failed to load network health",
     "updateFailed": "Failed to update monitoring",

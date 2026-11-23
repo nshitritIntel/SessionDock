@@ -692,6 +692,10 @@ pub(crate) async fn run_monitor_by_id(
         .map_err(|_| AppError::Validation("Invalid monitor identifier".into()))?;
     let config = load_monitor_run_config(&db.conn(), id)?;
     let _lease = acquire_monitor_run_lease(db, &config)?;
+    {
+        let mut conn = db.conn();
+        mark_monitor_run_started(&mut conn, id)?;
+    }
     let started = Instant::now();
     let result = execute_monitor(db, &config, started).await;
     if let Err(error) = &result {
@@ -701,6 +705,38 @@ pub(crate) async fn run_monitor_by_id(
     }
     result?;
     monitor_by_id(&db.conn(), id)
+}
+
+fn mark_monitor_run_started(conn: &mut Connection, id: &str) -> Result<(), AppError> {
+    let transaction = conn.transaction()?;
+    transaction.execute(
+        "UPDATE monitor_definitions SET last_started_at = ?1 WHERE id = ?2",
+        params![chrono::Utc::now().to_rfc3339(), id],
+    )?;
+    transaction.execute(
+        "DELETE FROM monitor_run_requests WHERE monitor_id = ?1",
+        params![id],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+fn queue_monitor_run(conn: &Connection, id: &str) -> Result<MonitorDefinition, AppError> {
+    uuid::Uuid::parse_str(id)
+        .map_err(|_| AppError::Validation("Invalid monitor identifier".into()))?;
+    let monitor = monitor_by_id(conn, id)?;
+    if !monitor.enabled {
+        return Err(AppError::Validation(
+            "Enable the monitor before running it".into(),
+        ));
+    }
+    conn.execute(
+        "INSERT INTO monitor_run_requests (monitor_id, requested_at)
+         VALUES (?1, ?2)
+         ON CONFLICT(monitor_id) DO UPDATE SET requested_at = excluded.requested_at",
+        params![id, chrono::Utc::now().to_rfc3339()],
+    )?;
+    Ok(monitor)
 }
 
 async fn execute_monitor(
@@ -780,11 +816,8 @@ fn normalize_log_output(output: super::diagnostics::BoundedSshOutput) -> (String
 }
 
 #[tauri::command]
-pub async fn run_monitor_now(
-    db: State<'_, Database>,
-    id: String,
-) -> Result<MonitorDefinition, AppError> {
-    run_monitor_by_id(&db, &id).await
+pub fn run_monitor_now(db: State<'_, Database>, id: String) -> Result<MonitorDefinition, AppError> {
+    queue_monitor_run(&db.conn(), &id)
 }
 
 #[cfg(test)]
@@ -794,8 +827,8 @@ mod tests {
 
     use super::{
         acquire_monitor_run_lease, create_monitor, is_transient_ssh_error, load_monitor_run_config,
-        monitor_commands, normalize_log_output, persist_failed_sample, persist_sample,
-        run_monitor_by_id, CreateMonitorRequest,
+        mark_monitor_run_started, monitor_commands, normalize_log_output, persist_failed_sample,
+        persist_sample, queue_monitor_run, run_monitor_by_id, CreateMonitorRequest,
     };
     use crate::{providers::arista_eos::parse_interfaces, AppError, Database};
 
@@ -914,6 +947,67 @@ mod tests {
         assert!(!is_transient_ssh_error(&AppError::Validation(
             "Invalid host".into()
         )));
+    }
+
+    #[tokio::test]
+    async fn queues_manual_runs_until_the_session_lease_is_acquired() {
+        let path = std::env::temp_dir().join(format!(
+            "sessiondock-monitor-queue-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let db = Database::new(&path).unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let monitor_id = uuid::Uuid::new_v4().to_string();
+        {
+            let conn = db.conn();
+            conn.execute(
+                "INSERT INTO sessions (id, name, host, protocol, authentication_method, created_at, updated_at)
+                 VALUES (?1, 'Router', '192.0.2.10', 'ssh', 'agent', datetime('now'), datetime('now'))",
+                params![session_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO monitor_definitions
+                 (id, session_id, provider_id, monitor_kind, interface_name, display_name, interval_seconds)
+                 VALUES (?1, ?2, 'cisco-ios', 'interfaces', 'GigabitEthernet1/0/1', 'WAN', 3600)",
+                params![monitor_id, session_id],
+            )
+            .unwrap();
+
+            let queued = queue_monitor_run(&conn, &monitor_id).unwrap();
+            assert_eq!(queued.id, monitor_id);
+            queue_monitor_run(&conn, &monitor_id).unwrap();
+        }
+        let config = load_monitor_run_config(&db.conn(), &monitor_id).unwrap();
+        let lease = acquire_monitor_run_lease(&db, &config).unwrap();
+        assert!(run_monitor_by_id(&db, &monitor_id).await.is_err());
+        assert_eq!(
+            db.conn()
+                .query_row(
+                    "SELECT COUNT(*) FROM monitor_run_requests WHERE monitor_id = ?1",
+                    params![monitor_id],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        drop(lease);
+        mark_monitor_run_started(&mut db.conn(), &monitor_id).unwrap();
+        let (last_started_at, request_count): (Option<String>, i64) = db
+            .conn()
+            .query_row(
+                "SELECT last_started_at,
+                        (SELECT COUNT(*) FROM monitor_run_requests WHERE monitor_id = ?1)
+                 FROM monitor_definitions WHERE id = ?1",
+                params![monitor_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(last_started_at.is_some());
+        assert_eq!(request_count, 0);
+
+        drop(db);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

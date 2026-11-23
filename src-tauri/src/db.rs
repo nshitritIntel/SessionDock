@@ -148,9 +148,17 @@ impl Database {
             )?;
         }
 
+        if current_version < 13 {
+            conn.execute_batch(include_str!("migrations/013_monitor_run_requests.sql"))?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![13],
+            )?;
+        }
+
         log::info!(
             "Database migrations complete. Version: {}",
-            std::cmp::max(current_version, 12)
+            std::cmp::max(current_version, 13)
         );
         Ok(())
     }
@@ -260,7 +268,16 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'monitor_run_requests'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
         );
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM session_jump_hosts", [], |row| row
@@ -411,7 +428,7 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            12
+            13
         );
         assert_eq!(
             conn.query_row(
