@@ -307,16 +307,33 @@ pub fn get_monitor_incidents(
 
 #[tauri::command]
 pub fn acknowledge_monitor_incident(db: State<'_, Database>, id: String) -> Result<(), AppError> {
-    validate_uuid(&id, "incident")?;
-    let changed = db.conn().execute(
-        "UPDATE monitor_incidents SET state = 'acknowledged'
-         WHERE id = ?1 AND state = 'open'",
-        params![id],
+    set_incident_acknowledged(&db.conn(), &id, true)
+}
+
+#[tauri::command]
+pub fn unacknowledge_monitor_incident(db: State<'_, Database>, id: String) -> Result<(), AppError> {
+    set_incident_acknowledged(&db.conn(), &id, false)
+}
+
+fn set_incident_acknowledged(
+    conn: &Connection,
+    id: &str,
+    acknowledged: bool,
+) -> Result<(), AppError> {
+    validate_uuid(id, "incident")?;
+    let (next_state, current_state) = if acknowledged {
+        ("acknowledged", "open")
+    } else {
+        ("open", "acknowledged")
+    };
+    let changed = conn.execute(
+        "UPDATE monitor_incidents SET state = ?1 WHERE id = ?2 AND state = ?3",
+        params![next_state, id, current_state],
     )?;
     if changed == 0 {
-        return Err(AppError::NotFound(
-            "Open monitor incident was not found".into(),
-        ));
+        return Err(AppError::NotFound(format!(
+            "{current_state} monitor incident was not found"
+        )));
     }
     Ok(())
 }
@@ -536,7 +553,7 @@ fn compare_snapshots(
 #[cfg(test)]
 mod tests {
     use super::{
-        capture_baseline, compare_snapshots, create_maintenance_marker,
+        capture_baseline, compare_snapshots, create_maintenance_marker, set_incident_acknowledged,
         CreateMaintenanceMarkerRequest, InterfaceSnapshot,
     };
     use crate::Database;
@@ -630,6 +647,72 @@ mod tests {
             .is_err());
         }
         drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn acknowledges_and_unacknowledges_incidents_across_database_reopen() {
+        let path = std::env::temp_dir().join(format!(
+            "sessiondock-monitor-acknowledgment-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let incident_id = uuid::Uuid::new_v4().to_string();
+        {
+            let db = Database::new(&path).unwrap();
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let monitor_id = uuid::Uuid::new_v4().to_string();
+            let conn = db.conn();
+            conn.execute(
+                "INSERT INTO sessions (id, name, host, protocol, authentication_method, created_at, updated_at)
+                 VALUES (?1, 'Router', '192.0.2.10', 'ssh', 'agent', datetime('now'), datetime('now'))",
+                rusqlite::params![session_id],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO monitor_definitions (id, session_id, provider_id, monitor_kind, display_name, interval_seconds)
+                 VALUES (?1, ?2, 'cisco-ios', 'interfaces', 'WAN', 30)",
+                rusqlite::params![monitor_id, session_id],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO monitor_incidents
+                 (id, monitor_id, fingerprint, severity, state, title, started_at, last_seen_at)
+                 VALUES (?1, ?2, 'interface-errors', 'warning', 'open', 'Errors', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z')",
+                rusqlite::params![incident_id, monitor_id],
+            ).unwrap();
+            set_incident_acknowledged(&conn, &incident_id, true).unwrap();
+            assert!(set_incident_acknowledged(&conn, &incident_id, true).is_err());
+        }
+        {
+            let db = Database::new(&path).unwrap();
+            let conn = db.conn();
+            assert_eq!(
+                conn.query_row(
+                    "SELECT state FROM monitor_incidents WHERE id = ?1",
+                    rusqlite::params![incident_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+                "acknowledged"
+            );
+            set_incident_acknowledged(&conn, &incident_id, false).unwrap();
+            assert!(set_incident_acknowledged(&conn, &incident_id, false).is_err());
+            conn.execute(
+                "UPDATE monitor_incidents SET state = 'resolved', resolved_at = '2026-01-01T00:02:00Z' WHERE id = ?1",
+                rusqlite::params![incident_id],
+            )
+            .unwrap();
+            assert!(set_incident_acknowledged(&conn, &incident_id, false).is_err());
+            let preserved: (String, String) = conn
+                .query_row(
+                    "SELECT started_at, last_seen_at FROM monitor_incidents WHERE id = ?1",
+                    rusqlite::params![incident_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(
+                preserved,
+                ("2026-01-01T00:00:00Z".into(), "2026-01-01T00:01:00Z".into())
+            );
+        }
         std::fs::remove_file(path).unwrap();
     }
 }

@@ -165,12 +165,14 @@ export async function restartMonitorWorkerAfterUpdateFailure(): Promise<void> {
 
 // --- Network health monitoring ---
 
+export type NetworkMonitorProviderId = "arista-eos" | "cisco-ios";
+
 export interface MonitorDefinition {
   id: string;
   sessionId: string;
   sessionName: string;
   host: string;
-  providerId: "arista-eos";
+  providerId: NetworkMonitorProviderId;
   monitorKind: "interfaces";
   interfaceName?: string;
   displayName: string;
@@ -249,7 +251,7 @@ export interface MaintenanceMarker {
 
 export async function createMonitorDefinition(request: {
   sessionId: string;
-  providerId: "arista-eos";
+  providerId: NetworkMonitorProviderId;
   monitorKind: "interfaces";
   interfaceName: string;
   displayName: string;
@@ -265,6 +267,10 @@ export async function getMonitorDefinitions(): Promise<MonitorDefinition[]> {
 
 export async function setMonitorEnabled(id: string, enabled: boolean): Promise<MonitorDefinition> {
   return nativeInvoke("set_monitor_enabled", { id, enabled });
+}
+
+export async function setMonitorInterval(id: string, intervalSeconds: number): Promise<MonitorDefinition> {
+  return nativeInvoke("set_monitor_interval", { id, intervalSeconds });
 }
 
 export async function deleteMonitorDefinition(id: string): Promise<void> {
@@ -289,6 +295,10 @@ export async function getMonitorIncidents(includeResolved = false): Promise<Moni
 
 export async function acknowledgeMonitorIncident(id: string): Promise<void> {
   return nativeInvoke("acknowledge_monitor_incident", { id });
+}
+
+export async function unacknowledgeMonitorIncident(id: string): Promise<void> {
+  return nativeInvoke("unacknowledge_monitor_incident", { id });
 }
 
 export async function captureMonitorBaseline(monitorId: string, name: string): Promise<MonitorBaseline> {

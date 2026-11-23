@@ -1,24 +1,8 @@
-use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::error::AppError;
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct InterfaceObservation {
-    pub(crate) name: String,
-    pub(crate) admin_status: Option<String>,
-    pub(crate) oper_status: Option<String>,
-    pub(crate) speed_bps: Option<i64>,
-    pub(crate) input_rate_bps: Option<i64>,
-    pub(crate) output_rate_bps: Option<i64>,
-    pub(crate) input_errors: Option<i64>,
-    pub(crate) output_errors: Option<i64>,
-    pub(crate) input_discards: Option<i64>,
-    pub(crate) output_discards: Option<i64>,
-    pub(crate) neighbor: Option<String>,
-    pub(crate) transceiver_status: Option<String>,
-}
+use super::network_monitor::InterfaceObservation;
 
 pub(crate) fn parse_interfaces(raw: &str) -> Result<Vec<InterfaceObservation>, AppError> {
     let root: Value = serde_json::from_str(raw).map_err(|error| {

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.6] - 2026-11-23
+
+### Added
+
+- Add provider-owned Cisco IOS and IOS-XE interface monitoring alongside Arista EOS
+- Add automatic Network Health refresh, editable 30-second-to-1-hour sampling intervals, copyable retained output, and incident unacknowledgment
+
+### Changed
+
+- Search the available Arista log history with `show logging | grep <INTERFACE>`
+- Run due monitors concurrently across up to four different saved sessions while serializing checks for each session
+
+### Fixed
+
+- Prevent scheduled and manual checks from opening overlapping SSH connections to the same saved session
+- Retry transient SSH transport and key-exchange failures with bounded exponential backoff and jitter while preserving host-key and authentication checks
+- Refresh automatically collected samples without requiring **Run Now** and reduce scheduler interval drift to approximately one second
+- Treat zero and unavailable counters distinctly from nonzero interface errors and preserve prior samples when collection fails
+- Wait briefly for concurrent SQLite writes instead of failing immediately under monitor and UI activity
+
+### Security
+
+- Keep all monitoring commands provider-owned and read-only, with bounded interface-name validation before substitution
+- Continue rejecting unknown monitoring platforms rather than executing generic or user-supplied commands
+
 ## [2.0.5] - 2026-11-22
 
 ### Added

@@ -1,12 +1,14 @@
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use fs2::FileExt;
 
 use crate::{commands::monitoring::run_monitor_by_id, AppError, Database};
 
-const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(15);
+const WORKER_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const MAX_CONCURRENT_MONITORS: usize = 4;
 const WORKER_SHUTDOWN_FILE: &str = "monitor-worker.shutdown";
 
 pub async fn run(app_data_dir: PathBuf) -> Result<(), AppError> {
@@ -24,7 +26,7 @@ pub async fn run(app_data_dir: PathBuf) -> Result<(), AppError> {
         return Ok(());
     }
 
-    let database = Database::new(&app_data_dir.join("sessiondock.db"))?;
+    let database = Arc::new(Database::new(&app_data_dir.join("sessiondock.db"))?);
     log::info!("SessionDock monitor worker started");
     loop {
         if take_shutdown_request(&app_data_dir)? {
@@ -39,21 +41,39 @@ pub async fn run(app_data_dir: PathBuf) -> Result<(), AppError> {
                 continue;
             }
         };
-        for monitor_id in due_monitor_ids {
-            if take_shutdown_request(&app_data_dir)? {
-                log::info!("SessionDock monitor worker stopped for application update");
-                return Ok(());
-            }
-            if let Err(error) = run_monitor_by_id(&database, &monitor_id).await {
-                log::warn!("Monitor {monitor_id} failed: {error}");
-            }
-        }
+        run_due_monitors(database.clone(), due_monitor_ids).await;
         if let Err(error) = crate::monitor_alerts::dispatch_pending(&database) {
             log::error!("Could not process monitor notifications: {error}");
         }
         if wait_for_poll_or_shutdown(&app_data_dir).await? {
             log::info!("SessionDock monitor worker stopped for application update");
             return Ok(());
+        }
+    }
+}
+
+async fn run_due_monitors(database: Arc<Database>, monitor_ids: Vec<String>) {
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_MONITORS));
+    let mut jobs = tokio::task::JoinSet::new();
+    for monitor_id in monitor_ids {
+        let permit = match semaphore.clone().acquire_owned().await {
+            Ok(permit) => permit,
+            Err(error) => {
+                log::error!("Monitor concurrency limiter closed unexpectedly: {error}");
+                break;
+            }
+        };
+        let database = database.clone();
+        jobs.spawn(async move {
+            let _permit = permit;
+            if let Err(error) = run_monitor_by_id(&database, &monitor_id).await {
+                log::warn!("Monitor {monitor_id} failed: {error}");
+            }
+        });
+    }
+    while let Some(result) = jobs.join_next().await {
+        if let Err(error) = result {
+            log::error!("Monitor task failed unexpectedly: {error}");
         }
     }
 }
@@ -127,6 +147,7 @@ fn validate_app_data_dir(path: &Path) -> Result<(), AppError> {
 
 fn due_monitors(database: &Database) -> Result<Vec<String>, AppError> {
     let conn = database.conn();
+    let stale_before = (chrono::Utc::now() - chrono::Duration::minutes(5)).to_rfc3339();
     let mut statement = conn.prepare(
         "SELECT m.id
          FROM monitor_definitions m
@@ -135,10 +156,14 @@ fn due_monitors(database: &Database) -> Result<Vec<String>, AppError> {
          )
          WHERE m.enabled = 1
            AND (latest.id IS NULL OR julianday(latest.observed_at) <= julianday('now', '-' || m.interval_seconds || ' seconds'))
+                     AND NOT EXISTS (
+                             SELECT 1 FROM monitor_run_leases lease
+                             WHERE lease.session_id = m.session_id AND lease.started_at > ?1
+                     )
          ORDER BY m.updated_at, m.id
          LIMIT 100",
     )?;
-    let ids = statement.query_map([], |row| row.get(0))?;
+    let ids = statement.query_map([stale_before], |row| row.get(0))?;
     ids.collect::<Result<Vec<_>, _>>()
         .map_err(AppError::Database)
 }
@@ -184,6 +209,56 @@ mod tests {
             }
         }
         assert_eq!(due_monitors(&db).unwrap(), vec![due_id]);
+        drop(db);
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn interval_changes_take_effect_and_active_sessions_are_not_scheduled() {
+        let path = std::env::temp_dir().join(format!("sessiondock-due-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();
+        let db = Database::new(&path.join("sessiondock.db")).unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let monitor_id = uuid::Uuid::new_v4().to_string();
+        {
+            let conn = db.conn();
+            conn.execute(
+                "INSERT INTO sessions (id, name, host, protocol, authentication_method, created_at, updated_at)
+                 VALUES (?1, 'Router', '192.0.2.20', 'ssh', 'agent', datetime('now'), datetime('now'))",
+                rusqlite::params![session_id],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO monitor_definitions
+                 (id, session_id, provider_id, monitor_kind, interface_name, display_name, interval_seconds)
+                 VALUES (?1, ?2, 'cisco-ios', 'interfaces', 'GigabitEthernet1/0/1', 'WAN', 60)",
+                rusqlite::params![monitor_id, session_id],
+            ).unwrap();
+            conn.execute(
+                "INSERT INTO monitor_samples (monitor_id, observed_at, status, duration_ms)
+                 VALUES (?1, datetime('now', '-40 seconds'), 'healthy', 1)",
+                rusqlite::params![monitor_id],
+            )
+            .unwrap();
+        }
+        assert!(due_monitors(&db).unwrap().is_empty());
+
+        db.conn()
+            .execute(
+                "UPDATE monitor_definitions SET interval_seconds = 30 WHERE id = ?1",
+                rusqlite::params![monitor_id],
+            )
+            .unwrap();
+        assert_eq!(due_monitors(&db).unwrap(), vec![monitor_id.clone()]);
+
+        db.conn()
+            .execute(
+                "INSERT INTO monitor_run_leases (session_id, monitor_id, started_at)
+             VALUES (?1, ?2, ?3)",
+                rusqlite::params![session_id, monitor_id, chrono::Utc::now().to_rfc3339()],
+            )
+            .unwrap();
+        assert!(due_monitors(&db).unwrap().is_empty());
+
         drop(db);
         std::fs::remove_dir_all(path).unwrap();
     }

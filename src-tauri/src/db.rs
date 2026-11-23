@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection};
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::Duration;
 
 use crate::error::AppError;
 
@@ -11,6 +12,7 @@ pub struct Database {
 impl Database {
     pub fn new(path: &Path) -> Result<Self, AppError> {
         let conn = Connection::open(path)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
         let db = Self {
             conn: Mutex::new(conn),
         };
@@ -138,9 +140,17 @@ impl Database {
             )?;
         }
 
+        if current_version < 12 {
+            conn.execute_batch(include_str!("migrations/012_monitor_run_leases.sql"))?;
+            conn.execute(
+                "INSERT INTO schema_version (version) VALUES (?1)",
+                params![12],
+            )?;
+        }
+
         log::info!(
             "Database migrations complete. Version: {}",
-            std::cmp::max(current_version, 11)
+            std::cmp::max(current_version, 12)
         );
         Ok(())
     }
@@ -250,7 +260,7 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM session_jump_hosts", [], |row| row
@@ -401,7 +411,7 @@ mod tests {
             conn.query_row("SELECT MAX(version) FROM schema_version", [], |row| row
                 .get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         assert_eq!(
             conn.query_row(
