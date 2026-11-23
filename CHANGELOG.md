@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep all monitoring commands provider-owned and read-only, with bounded interface-name validation before substitution
 - Continue rejecting unknown monitoring platforms rather than executing generic or user-supplied commands
+- Upgrade transitive `cookie` and `url` dependencies to versions that address the current RustSec advisories
 
 ## [2.0.5] - 2026-11-22
 
