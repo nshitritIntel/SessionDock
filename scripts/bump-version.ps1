@@ -6,6 +6,8 @@ param(
     [string]$Version
 )
 
+$ErrorActionPreference = "Stop"
+
 # Validate semver format
 if ($Version -notmatch '^\d+\.\d+\.\d+$') {
     Write-Host "ERROR: Version must be in semver format (e.g. 0.4.0)" -ForegroundColor Red
@@ -15,11 +17,23 @@ if ($Version -notmatch '^\d+\.\d+\.\d+$') {
 Write-Host "Bumping SessionDock to v$Version" -ForegroundColor Cyan
 
 # Keep package.json and package-lock.json synchronized.
-npm version $Version --no-git-tag-version
+npm version $Version --no-git-tag-version --allow-same-version
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-# Use Node.js to safely modify JSON (avoids PowerShell BOM/encoding issues)
-node -e "const fs=require('fs');const t=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8'));t.version='$Version';fs.writeFileSync('src-tauri/tauri.conf.json',JSON.stringify(t,null,2)+'\n');console.log('  tauri.conf.json:',t.version)"
+# Use structured JSON serialization and atomically replace files that an editor may memory-map.
+$tauriPath = "src-tauri\tauri.conf.json"
+$tauriTempPath = "$PWD\$tauriPath.sessiondock.tmp"
+try {
+    $env:SESSIONDOCK_VERSION = $Version
+    node -e "const fs=require('fs');const source='src-tauri/tauri.conf.json';const target=source+'.sessiondock.tmp';const config=JSON.parse(fs.readFileSync(source,'utf8'));config.version=process.env.SESSIONDOCK_VERSION;fs.writeFileSync(target,JSON.stringify(config,null,2)+'\n')"
+    if ($LASTEXITCODE -ne 0) { throw "Unable to serialize tauri.conf.json" }
+    Move-Item -LiteralPath $tauriTempPath -Destination "$PWD\$tauriPath" -Force
+}
+finally {
+    Remove-Item Env:SESSIONDOCK_VERSION -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tauriTempPath -Force -ErrorAction SilentlyContinue
+}
+Write-Host "  tauri.conf.json: $Version"
 
 # Cargo.toml package version (dependency versions may appear inline)
 $cargoPath = "src-tauri\Cargo.toml"
