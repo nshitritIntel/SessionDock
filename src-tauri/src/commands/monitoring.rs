@@ -1,19 +1,21 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::AtomicBool;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::State;
 
 use crate::db::Database;
 use crate::error::AppError;
-use crate::providers::arista_eos::{parse_interfaces, InterfaceObservation};
+use crate::providers::network_monitor::{self, InterfaceObservation};
 
 const MIN_INTERVAL_SECONDS: u32 = 30;
 const MAX_INTERVAL_SECONDS: u32 = 86_400;
 const MIN_RETENTION_HOURS: u32 = 24;
 const MAX_RETENTION_HOURS: u32 = 8_760;
 const MAX_DISPLAY_NAME_LENGTH: usize = 100;
-const MAX_INTERFACE_NAME_LENGTH: usize = 64;
+const MONITOR_LEASE_TIMEOUT_MINUTES: i64 = 5;
+const MAX_SSH_ATTEMPTS: usize = 3;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,6 +52,8 @@ pub struct MonitorDefinition {
 
 struct MonitorRunConfig {
     monitor_id: String,
+    session_id: String,
+    provider_id: String,
     host: String,
     port: u16,
     username: String,
@@ -61,44 +65,43 @@ struct MonitorRunConfig {
     retention_hours: u32,
 }
 
-fn validate_interface_name(value: &str) -> Result<&str, AppError> {
-    let value = value.trim();
-    if value.is_empty()
-        || value.len() > MAX_INTERFACE_NAME_LENGTH
-        || value.starts_with('-')
-        || value.contains("..")
-        || !value.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'/' | b'.' | b':')
-        })
-    {
-        return Err(AppError::Validation(
-            "Enter one valid interface name, for example Ethernet15 or Ethernet1/1".into(),
-        ));
-    }
-    Ok(value)
+struct MonitorRunLease<'a> {
+    db: &'a Database,
+    session_id: String,
+    monitor_id: String,
 }
 
-fn monitor_commands(interface_name: Option<&str>) -> Result<(String, String), AppError> {
+impl Drop for MonitorRunLease<'_> {
+    fn drop(&mut self) {
+        if let Err(error) = self.db.conn().execute(
+            "DELETE FROM monitor_run_leases WHERE session_id = ?1 AND monitor_id = ?2",
+            params![self.session_id, self.monitor_id],
+        ) {
+            log::warn!("Could not release monitor execution lease: {error}");
+        }
+    }
+}
+
+fn monitor_commands(
+    provider_id: &str,
+    interface_name: Option<&str>,
+) -> Result<network_monitor::MonitorCommands, AppError> {
     let interface_name = interface_name.ok_or_else(|| {
         AppError::Validation(
             "This legacy monitor has no interface scope; delete it and create a scoped monitor"
                 .into(),
         )
     })?;
-    let interface_name = validate_interface_name(interface_name)?;
-    Ok((
-        format!("show interfaces {interface_name} | json"),
-        format!("show logging last 50 | grep {interface_name}"),
-    ))
+    network_monitor::commands(provider_id, interface_name)
 }
 
 fn validate_monitor_request(request: &CreateMonitorRequest) -> Result<(&str, &str), AppError> {
     uuid::Uuid::parse_str(&request.session_id)
         .map_err(|_| AppError::Validation("Invalid monitoring session identifier".into()))?;
-    if request.provider_id != "arista-eos" || request.monitor_kind != "interfaces" {
+    if !network_monitor::is_supported(&request.provider_id) || request.monitor_kind != "interfaces"
+    {
         return Err(AppError::Validation(
-            "Unsupported provider monitor; only Arista EOS interface monitoring is available"
-                .into(),
+            "Unsupported provider monitor; select Arista EOS or Cisco IOS/IOS-XE".into(),
         ));
     }
     let display_name = request.display_name.trim();
@@ -119,7 +122,7 @@ fn validate_monitor_request(request: &CreateMonitorRequest) -> Result<(&str, &st
     }
     Ok((
         display_name,
-        validate_interface_name(&request.interface_name)?,
+        network_monitor::validate_interface_name(&request.interface_name)?,
     ))
 }
 
@@ -260,6 +263,32 @@ pub fn set_monitor_enabled(
 }
 
 #[tauri::command]
+pub fn set_monitor_interval(
+    db: State<'_, Database>,
+    id: String,
+    interval_seconds: u32,
+) -> Result<MonitorDefinition, AppError> {
+    uuid::Uuid::parse_str(&id)
+        .map_err(|_| AppError::Validation("Invalid monitor identifier".into()))?;
+    if !(MIN_INTERVAL_SECONDS..=MAX_INTERVAL_SECONDS).contains(&interval_seconds) {
+        return Err(AppError::Validation(format!(
+            "Monitor interval must be between {MIN_INTERVAL_SECONDS} and {MAX_INTERVAL_SECONDS} seconds"
+        )));
+    }
+    let conn = db.conn();
+    let changed = conn.execute(
+        "UPDATE monitor_definitions SET interval_seconds = ?1, updated_at = ?2 WHERE id = ?3",
+        params![interval_seconds, chrono::Utc::now().to_rfc3339(), id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(format!(
+            "Monitor definition not found: {id}"
+        )));
+    }
+    monitor_by_id(&conn, &id)
+}
+
+#[tauri::command]
 pub fn delete_monitor_definition(db: State<'_, Database>, id: String) -> Result<(), AppError> {
     uuid::Uuid::parse_str(&id)
         .map_err(|_| AppError::Validation("Invalid monitor identifier".into()))?;
@@ -277,7 +306,7 @@ pub fn delete_monitor_definition(db: State<'_, Database>, id: String) -> Result<
 fn load_monitor_run_config(conn: &Connection, id: &str) -> Result<MonitorRunConfig, AppError> {
     let mut config = conn
         .query_row(
-            "SELECT m.id, s.host, s.port, COALESCE(s.username, ''), s.authentication_method,
+                    "SELECT m.id, m.session_id, m.provider_id, s.host, s.port, COALESCE(s.username, ''), s.authentication_method,
                     s.credential_profile_id, s.private_key_reference, m.interface_name, m.retention_hours
              FROM monitor_definitions m JOIN sessions s ON s.id = m.session_id
              WHERE m.id = ?1 AND m.enabled = 1",
@@ -285,15 +314,17 @@ fn load_monitor_run_config(conn: &Connection, id: &str) -> Result<MonitorRunConf
             |row| {
                 Ok(MonitorRunConfig {
                     monitor_id: row.get(0)?,
-                    host: row.get(1)?,
-                    port: row.get(2)?,
-                    username: row.get(3)?,
-                    authentication_method: row.get(4)?,
-                    credential_profile_id: row.get(5)?,
-                    private_key_reference: row.get(6)?,
+                    session_id: row.get(1)?,
+                    provider_id: row.get(2)?,
+                    host: row.get(3)?,
+                    port: row.get(4)?,
+                    username: row.get(5)?,
+                    authentication_method: row.get(6)?,
+                    credential_profile_id: row.get(7)?,
+                    private_key_reference: row.get(8)?,
                     jump_host_ids: Vec::new(),
-                    interface_name: row.get(7)?,
-                    retention_hours: row.get(8)?,
+                    interface_name: row.get(9)?,
+                    retention_hours: row.get(10)?,
                 })
             },
         )
@@ -312,6 +343,109 @@ fn load_monitor_run_config(conn: &Connection, id: &str) -> Result<MonitorRunConf
         .query_map(params![id], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(config)
+}
+
+fn acquire_monitor_run_lease<'a>(
+    db: &'a Database,
+    config: &MonitorRunConfig,
+) -> Result<MonitorRunLease<'a>, AppError> {
+    let now = chrono::Utc::now();
+    let stale_before =
+        (now - chrono::Duration::minutes(MONITOR_LEASE_TIMEOUT_MINUTES)).to_rfc3339();
+    let changed = db.conn().execute(
+        "INSERT INTO monitor_run_leases (session_id, monitor_id, started_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(session_id) DO UPDATE SET monitor_id = excluded.monitor_id, started_at = excluded.started_at
+         WHERE monitor_run_leases.started_at <= ?4",
+        params![config.session_id, config.monitor_id, now.to_rfc3339(), stale_before],
+    )?;
+    if changed == 0 {
+        return Err(AppError::Generic(
+            "A Network Health check is already running for this saved session".into(),
+        ));
+    }
+    Ok(MonitorRunLease {
+        db,
+        session_id: config.session_id.clone(),
+        monitor_id: config.monitor_id.clone(),
+    })
+}
+
+fn is_transient_ssh_error(error: &AppError) -> bool {
+    let AppError::Ssh(message) = error else {
+        return false;
+    };
+    let message = message.to_ascii_lowercase();
+    [
+        "unable to exchange encryption keys",
+        "session(-8)",
+        "timed out",
+        "timeout",
+        "connection reset",
+        "connection aborted",
+        "broken pipe",
+        "temporarily unavailable",
+        "tcp connection",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+        && !message.contains("authentication")
+        && !message.contains("host key")
+}
+
+fn retry_delay(monitor_id: &str, attempt: usize) -> Duration {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    monitor_id.hash(&mut hasher);
+    attempt.hash(&mut hasher);
+    let jitter_ms = hasher.finish() % 200;
+    Duration::from_millis(250 * (1_u64 << attempt) + jitter_ms)
+}
+
+async fn open_monitor_connection(
+    db: &Database,
+    config: &MonitorRunConfig,
+    host: &str,
+) -> Result<crate::terminal::StandaloneSshConnection, AppError> {
+    for attempt in 0..MAX_SSH_ATTEMPTS {
+        let authentication = super::terminal::resolve_ssh_authentication(
+            db,
+            &config.authentication_method,
+            config.credential_profile_id.as_deref(),
+            config.private_key_reference.as_deref(),
+            "",
+        )?;
+        let jump_hosts = super::terminal::resolve_jump_hosts(db, &config.jump_host_ids)?;
+        match crate::terminal::open_trusted_ssh_connection(
+            db,
+            host.to_string(),
+            config.port,
+            config.username.clone(),
+            authentication,
+            jump_hosts,
+        )
+        .await
+        {
+            Ok(connection) => return Ok(connection),
+            Err(error) if is_transient_ssh_error(&error) && attempt + 1 < MAX_SSH_ATTEMPTS => {
+                log::warn!(
+                    "Transient monitor SSH transport failure for monitor {}; retrying attempt {} of {}",
+                    config.monitor_id,
+                    attempt + 2,
+                    MAX_SSH_ATTEMPTS
+                );
+                tokio::time::sleep(retry_delay(&config.monitor_id, attempt)).await;
+            }
+            Err(AppError::Ssh(message))
+                if is_transient_ssh_error(&AppError::Ssh(message.clone())) =>
+            {
+                return Err(AppError::Ssh(format!(
+                    "Monitor transport failed after {MAX_SSH_ATTEMPTS} attempts: {message}. Check device SSH connection limits, reachability, and supported key-exchange algorithms"
+                )));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("the bounded SSH retry loop always returns")
 }
 
 fn persist_sample(
@@ -414,7 +548,7 @@ fn update_execution_incident(
     config: &MonitorRunConfig,
     observed_at: &str,
 ) -> Result<(), AppError> {
-    let fingerprint = "arista-eos:monitor-execution-failed";
+    let fingerprint = format!("{}:monitor-execution-failed", config.provider_id);
     let existing = conn.query_row(
         "SELECT id FROM monitor_incidents
          WHERE monitor_id = ?1 AND fingerprint = ?2 AND state != 'resolved'",
@@ -454,11 +588,12 @@ fn resolve_execution_incident(
     config: &MonitorRunConfig,
     observed_at: &str,
 ) -> Result<(), AppError> {
+    let fingerprint = format!("{}:monitor-execution-failed", config.provider_id);
     conn.execute(
         "UPDATE monitor_incidents SET state = 'resolved', resolved_at = ?1, last_seen_at = ?1
-         WHERE monitor_id = ?2 AND fingerprint = 'arista-eos:monitor-execution-failed'
+         WHERE monitor_id = ?2 AND fingerprint = ?3
            AND state != 'resolved'",
-        params![observed_at, config.monitor_id],
+        params![observed_at, config.monitor_id, fingerprint],
     )?;
     Ok(())
 }
@@ -469,7 +604,7 @@ fn update_interface_incident(
     observed_at: &str,
     down_count: usize,
 ) -> Result<(), AppError> {
-    let fingerprint = "arista-eos:interfaces-down";
+    let fingerprint = format!("{}:interfaces-down", config.provider_id);
     let existing = conn.query_row(
         "SELECT id FROM monitor_incidents WHERE monitor_id = ?1 AND fingerprint = ?2 AND state != 'resolved'",
         params![config.monitor_id, fingerprint],
@@ -510,7 +645,7 @@ fn update_interface_error_incident(
     observed_at: &str,
     error_count: usize,
 ) -> Result<(), AppError> {
-    let fingerprint = "arista-eos:interface-errors";
+    let fingerprint = format!("{}:interface-errors", config.provider_id);
     let existing = conn.query_row(
         "SELECT id FROM monitor_incidents WHERE monitor_id = ?1 AND fingerprint = ?2 AND state != 'resolved'",
         params![config.monitor_id, fingerprint],
@@ -556,6 +691,7 @@ pub(crate) async fn run_monitor_by_id(
     uuid::Uuid::parse_str(id)
         .map_err(|_| AppError::Validation("Invalid monitor identifier".into()))?;
     let config = load_monitor_run_config(&db.conn(), id)?;
+    let _lease = acquire_monitor_run_lease(db, &config)?;
     let started = Instant::now();
     let result = execute_monitor(db, &config, started).await;
     if let Err(error) = &result {
@@ -578,27 +714,11 @@ async fn execute_monitor(
         ));
     }
     let host = super::terminal::validate_ssh_endpoint(&config.host, config.port)?;
-    let authentication = super::terminal::resolve_ssh_authentication(
-        db,
-        &config.authentication_method,
-        config.credential_profile_id.as_deref(),
-        config.private_key_reference.as_deref(),
-        "",
-    )?;
-    let jump_hosts = super::terminal::resolve_jump_hosts(db, &config.jump_host_ids)?;
-    let connection = crate::terminal::open_trusted_ssh_connection(
-        db,
-        host,
-        config.port,
-        config.username.clone(),
-        authentication,
-        jump_hosts,
-    )
-    .await?;
-    let (interface_command, log_command) = monitor_commands(config.interface_name.as_deref())?;
+    let connection = open_monitor_connection(db, config, &host).await?;
+    let commands = monitor_commands(&config.provider_id, config.interface_name.as_deref())?;
     let output = super::diagnostics::execute_bounded_ssh_command(
         &connection.session,
-        &interface_command,
+        &commands.interface,
         &AtomicBool::new(false),
     )
     .await;
@@ -609,33 +729,20 @@ async fn execute_monitor(
                 .unwrap_or_else(|| "Arista EOS monitor command failed".into()),
         ));
     }
-    let observations = parse_interfaces(&output.stdout)?;
+    let interface_name = config.interface_name.as_deref().ok_or_else(|| {
+        AppError::Validation("The monitor does not have an interface scope".into())
+    })?;
+    let observations =
+        network_monitor::parse_interfaces(&config.provider_id, interface_name, &output.stdout)?;
     let log_output = super::diagnostics::execute_bounded_ssh_command(
         &connection.session,
-        &log_command,
+        &commands.logs,
         &AtomicBool::new(false),
     )
     .await;
-    let (relevant_logs, log_count) = if log_output.status == "completed" {
-        let log_count = log_output
-            .stdout
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .count();
-        (log_output.stdout, log_count)
-    } else {
-        (
-            format!(
-                "Log collection unavailable: {}",
-                log_output
-                    .error
-                    .unwrap_or_else(|| "Arista EOS logging command failed".into())
-            ),
-            0,
-        )
-    };
+    let (relevant_logs, log_count) = normalize_log_output(log_output);
     let raw_output = format!(
-        "Interface state (JSON):\n{}\n\nRelevant recent logs:\n{}",
+        "Interface state:\n{}\n\nRelevant logs:\n{}",
         output.stdout, relevant_logs
     );
     let observed_at = chrono::Utc::now().to_rfc3339();
@@ -652,6 +759,26 @@ async fn execute_monitor(
     Ok(())
 }
 
+fn normalize_log_output(output: super::diagnostics::BoundedSshOutput) -> (String, usize) {
+    if output.status == "completed" {
+        let count = output
+            .stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count();
+        return (output.stdout, count);
+    }
+    (
+        format!(
+            "Log collection unavailable: {}",
+            output
+                .error
+                .unwrap_or_else(|| "Provider logging command failed".into())
+        ),
+        0,
+    )
+}
+
 #[tauri::command]
 pub async fn run_monitor_now(
     db: State<'_, Database>,
@@ -662,11 +789,13 @@ pub async fn run_monitor_now(
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::params;
     use std::time::Instant;
 
     use super::{
-        create_monitor, load_monitor_run_config, monitor_commands, persist_failed_sample,
-        persist_sample, run_monitor_by_id, CreateMonitorRequest,
+        acquire_monitor_run_lease, create_monitor, is_transient_ssh_error, load_monitor_run_config,
+        monitor_commands, normalize_log_output, persist_failed_sample, persist_sample,
+        run_monitor_by_id, CreateMonitorRequest,
     };
     use crate::{providers::arista_eos::parse_interfaces, AppError, Database};
 
@@ -701,22 +830,104 @@ mod tests {
         assert!(create_monitor(&conn, &request).is_err());
 
         assert_eq!(
-            monitor_commands(Some("Ethernet15")).unwrap(),
-            (
-                "show interfaces Ethernet15 | json".into(),
-                "show logging last 50 | grep Ethernet15".into(),
-            )
+            monitor_commands("arista-eos", Some("Ethernet15")).unwrap(),
+            crate::providers::network_monitor::MonitorCommands {
+                interface: "show interfaces Ethernet15 | json".into(),
+                logs: "show logging | grep Ethernet15".into(),
+            }
         );
-        assert!(monitor_commands(Some("Ethernet15 | reload")).is_err());
-        assert!(monitor_commands(Some("Ethernet15; reload")).is_err());
-        assert!(monitor_commands(Some("../../../etc/passwd")).is_err());
-        assert!(monitor_commands(Some("-all")).is_err());
-        assert!(monitor_commands(Some(&"a".repeat(65))).is_err());
-        assert!(monitor_commands(None).is_err());
+        assert!(monitor_commands("arista-eos", Some("Ethernet15 | reload")).is_err());
+        assert!(monitor_commands("arista-eos", Some("Ethernet15; reload")).is_err());
+        assert!(monitor_commands("arista-eos", Some("../../../etc/passwd")).is_err());
+        assert!(monitor_commands("arista-eos", Some("-all")).is_err());
+        assert!(monitor_commands("arista-eos", Some(&"a".repeat(65))).is_err());
+        assert!(monitor_commands("arista-eos", None).is_err());
 
         drop(conn);
         drop(db);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn serializes_monitor_runs_per_saved_session_and_recovers_stale_leases() {
+        let path = std::env::temp_dir().join(format!(
+            "sessiondock-monitor-lease-{}.db",
+            uuid::Uuid::new_v4()
+        ));
+        let first_db = Database::new(&path).unwrap();
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let monitor_id = uuid::Uuid::new_v4().to_string();
+        {
+            let conn = first_db.conn();
+            conn.execute(
+                "INSERT INTO sessions (id, name, host, port, protocol, username, authentication_method, created_at, updated_at)
+                 VALUES (?1, 'Leaf', '192.0.2.10', 22, 'ssh', 'admin', 'agent', datetime('now'), datetime('now'))",
+                params![session_id],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO monitor_definitions
+                 (id, session_id, provider_id, monitor_kind, interface_name, display_name, interval_seconds)
+                 VALUES (?1, ?2, 'arista-eos', 'interfaces', 'Ethernet1', 'Port', 30)",
+                params![monitor_id, session_id],
+            )
+            .unwrap();
+        }
+        let second_db = Database::new(&path).unwrap();
+        let config = load_monitor_run_config(&first_db.conn(), &monitor_id).unwrap();
+        let lease = acquire_monitor_run_lease(&first_db, &config).unwrap();
+        assert!(acquire_monitor_run_lease(&second_db, &config).is_err());
+        drop(lease);
+        let replacement = acquire_monitor_run_lease(&second_db, &config).unwrap();
+        drop(replacement);
+
+        first_db
+            .conn()
+            .execute(
+                "INSERT INTO monitor_run_leases (session_id, monitor_id, started_at)
+             VALUES (?1, ?2, '2000-01-01T00:00:00Z')",
+                params![session_id, monitor_id],
+            )
+            .unwrap();
+        let recovered = acquire_monitor_run_lease(&second_db, &config).unwrap();
+        drop(recovered);
+
+        drop(second_db);
+        drop(first_db);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn retries_only_transient_ssh_transport_failures() {
+        assert!(is_transient_ssh_error(&AppError::Ssh(
+            "SSH handshake failed: [Session(-8)] Unable to exchange encryption keys".into()
+        )));
+        assert!(is_transient_ssh_error(&AppError::Ssh(
+            "TCP connection timed out".into()
+        )));
+        assert!(!is_transient_ssh_error(&AppError::Ssh(
+            "Authentication stage failed: password rejected".into()
+        )));
+        assert!(!is_transient_ssh_error(&AppError::Ssh(
+            "Host key changed".into()
+        )));
+        assert!(!is_transient_ssh_error(&AppError::Validation(
+            "Invalid host".into()
+        )));
+    }
+
+    #[test]
+    fn accepts_empty_matching_logs_without_failing_the_sample() {
+        let (logs, count) = normalize_log_output(super::super::diagnostics::BoundedSshOutput {
+            status: "completed",
+            stdout: String::new(),
+            stderr: String::new(),
+            exit_code: Some(0),
+            truncated: false,
+            error: None,
+        });
+        assert!(logs.is_empty());
+        assert_eq!(count, 0);
     }
 
     #[test]

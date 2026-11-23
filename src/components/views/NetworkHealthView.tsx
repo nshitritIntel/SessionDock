@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { useTranslation } from "react-i18next";
 import {
   Activity,
   BellRing,
   CalendarClock,
   Check,
+  Copy,
   GitCompare,
   Pause,
   Play,
@@ -12,6 +14,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
+  Undo2,
   X,
 } from "lucide-react";
 import {
@@ -31,6 +34,8 @@ import {
   getMonitorSamples,
   runMonitorNow,
   setMonitorEnabled,
+  setMonitorInterval,
+  unacknowledgeMonitorIncident,
   type BaselineComparison,
   type MaintenanceMarker,
   type MonitorBaseline,
@@ -38,11 +43,13 @@ import {
   type MonitorIncident,
   type MonitorSample,
   type MonitorSampleDetail,
+  type NetworkMonitorProviderId,
 } from "../../api/commands";
 import { useSessionStore } from "../../stores/sessionStore";
 import { useToastStore } from "../../stores/toastStore";
 
 type DashboardTab = "overview" | "incidents" | "baselines" | "maintenance";
+const NETWORK_HEALTH_REFRESH_INTERVAL_MS = 5_000;
 
 export function NetworkHealthView() {
   const { t } = useTranslation();
@@ -116,6 +123,43 @@ export function NetworkHealthView() {
     return () => { cancelled = true; };
   }, [addToast, selectedMonitorId, t]);
 
+  useEffect(() => {
+    let disposed = false;
+    let refreshing = false;
+    const poll = async () => {
+      if (disposed || refreshing) return;
+      refreshing = true;
+      try {
+        const [nextMonitors, nextIncidents, nextMaintenance, nextSamples] = await Promise.all([
+          getMonitorDefinitions(),
+          getMonitorIncidents(true),
+          getMonitorMaintenance(),
+          selectedMonitorId ? getMonitorSamples(selectedMonitorId, 48) : Promise.resolve([]),
+        ]);
+        if (!disposed) {
+          setMonitors(nextMonitors);
+          setIncidents(nextIncidents);
+          setMaintenance(nextMaintenance);
+          setSamples(nextSamples);
+        }
+      } catch {
+        // Keep the last known health state; explicit refresh surfaces persistent failures.
+      } finally {
+        refreshing = false;
+      }
+    };
+    const interval = window.setInterval(() => void poll(), NETWORK_HEALTH_REFRESH_INTERVAL_MS);
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void poll();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [selectedMonitorId]);
+
   const refresh = async () => {
     try {
       await refreshOverview();
@@ -149,6 +193,15 @@ export function NetworkHealthView() {
   const toggleMonitor = async (monitor: MonitorDefinition) => {
     try {
       const updated = await setMonitorEnabled(monitor.id, !monitor.enabled);
+      setMonitors((current) => current.map((item) => item.id === updated.id ? updated : item));
+    } catch (error) {
+      addToast("error", `${t("monitoring.updateFailed")}: ${String(error)}`);
+    }
+  };
+
+  const updateInterval = async (monitor: MonitorDefinition, intervalSeconds: number) => {
+    try {
+      const updated = await setMonitorInterval(monitor.id, intervalSeconds);
       setMonitors((current) => current.map((item) => item.id === updated.id ? updated : item));
     } catch (error) {
       addToast("error", `${t("monitoring.updateFailed")}: ${String(error)}`);
@@ -235,6 +288,7 @@ export function NetworkHealthView() {
             onSelect={setSelectedMonitorId}
             onRun={runNow}
             onToggle={toggleMonitor}
+            onIntervalChange={updateInterval}
             onDelete={removeMonitor}
             sampleDetail={sampleDetail}
             onSelectSample={async (sampleId) => {
@@ -252,6 +306,14 @@ export function NetworkHealthView() {
             onAcknowledge={async (id) => {
               try {
                 await acknowledgeMonitorIncident(id);
+                await refreshOverview();
+              } catch (error) {
+                addToast("error", `${t("monitoring.updateFailed")}: ${String(error)}`);
+              }
+            }}
+            onUnacknowledge={async (id) => {
+              try {
+                await unacknowledgeMonitorIncident(id);
                 await refreshOverview();
               } catch (error) {
                 addToast("error", `${t("monitoring.updateFailed")}: ${String(error)}`);
@@ -320,6 +382,9 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
   const { t } = useTranslation();
   const addToast = useToastStore((state) => state.addToast);
   const [sessionId, setSessionId] = useState(sessions[0]?.id ?? "");
+  const [providerId, setProviderId] = useState<NetworkMonitorProviderId | "">(
+    inferMonitorProvider(sessions[0]),
+  );
   const [name, setName] = useState("");
   const [interfaceName, setInterfaceName] = useState("");
   const [intervalSeconds, setIntervalSeconds] = useState(300);
@@ -332,7 +397,7 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
       const session = sessions.find((item) => item.id === sessionId);
       const monitor = await createMonitorDefinition({
         sessionId,
-        providerId: "arista-eos",
+        providerId: providerId as NetworkMonitorProviderId,
         monitorKind: "interfaces",
         interfaceName: interfaceName.trim(),
         displayName: name.trim() || `${session?.name ?? "Arista"} interfaces`,
@@ -349,12 +414,23 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
 
   return (
     <form onSubmit={submit} className="border-b border-dock-border bg-dock-surface px-5 py-4">
-      <div className="mx-auto grid max-w-7xl items-end gap-3 lg:grid-cols-[minmax(12rem,1fr)_10rem_minmax(12rem,1fr)_9rem_auto]">
+      <div className="mx-auto grid max-w-7xl items-end gap-3 lg:grid-cols-[minmax(12rem,1fr)_10rem_10rem_minmax(12rem,1fr)_9rem_auto]">
         <label className="text-[11px] text-dock-text-muted">
           {t("monitoring.sshSession")}
-          <select required value={sessionId} onChange={(event) => setSessionId(event.target.value)} className="form-input mt-1 w-full">
+          <select required value={sessionId} onChange={(event) => {
+            setSessionId(event.target.value);
+            setProviderId(inferMonitorProvider(sessions.find((session) => session.id === event.target.value)));
+          }} className="form-input mt-1 w-full">
             <option value="">{t("monitoring.selectSession")}</option>
             {sessions.map((session) => <option key={session.id} value={session.id}>{session.name} · {session.host}</option>)}
+          </select>
+        </label>
+        <label className="text-[11px] text-dock-text-muted">
+          {t("monitoring.platform")}
+          <select required value={providerId} onChange={(event) => setProviderId(event.target.value as NetworkMonitorProviderId)} className="form-input mt-1 w-full">
+            <option value="">{t("monitoring.selectPlatform")}</option>
+            <option value="arista-eos">Arista EOS</option>
+            <option value="cisco-ios">Cisco IOS / IOS-XE</option>
           </select>
         </label>
         <label className="text-[11px] text-dock-text-muted">
@@ -368,12 +444,12 @@ function MonitorSetup({ sessions, onClose, onCreated }: {
         <label className="text-[11px] text-dock-text-muted">
           {t("monitoring.interval")}
           <select value={intervalSeconds} onChange={(event) => setIntervalSeconds(Number(event.target.value))} className="form-input mt-1 w-full">
-            <option value={60}>1 min</option><option value={300}>5 min</option><option value={900}>15 min</option><option value={3600}>1 hour</option>
+            <option value={30}>30 sec</option><option value={60}>1 min</option><option value={300}>5 min</option><option value={900}>15 min</option><option value={3600}>1 hour</option>
           </select>
         </label>
         <div className="flex gap-2">
           <button type="button" onClick={onClose} className="icon-button" title={t("common.cancel")}><X size={15} /></button>
-          <button disabled={submitting || !sessionId || !interfaceName.trim()} className="rounded-md bg-dock-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{t("common.create")}</button>
+          <button disabled={submitting || !sessionId || !providerId || !interfaceName.trim()} className="rounded-md bg-dock-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-50">{t("common.create")}</button>
         </div>
       </div>
     </form>
@@ -385,11 +461,12 @@ function HealthMetric({ label, value, tone }: { label: string; value: number; to
   return <div className="bg-dock-surface px-4 py-3"><div className={`text-xl font-semibold tabular-nums ${tones[tone]}`}>{value}</div><div className="text-[11px] text-dock-text-muted">{label}</div></div>;
 }
 
-function Overview({ monitors, selectedId, samples, runningId, sampleDetail, onSelect, onRun, onToggle, onDelete, onSelectSample }: {
+function Overview({ monitors, selectedId, samples, runningId, sampleDetail, onSelect, onRun, onToggle, onIntervalChange, onDelete, onSelectSample }: {
   monitors: MonitorDefinition[]; selectedId?: string; samples: MonitorSample[]; runningId?: string;
   sampleDetail?: MonitorSampleDetail;
   onSelect: (id: string) => void; onRun: (id: string) => Promise<void>;
   onToggle: (monitor: MonitorDefinition) => Promise<void>; onDelete: (monitor: MonitorDefinition) => Promise<void>;
+  onIntervalChange: (monitor: MonitorDefinition, intervalSeconds: number) => Promise<void>;
   onSelectSample: (sampleId: number) => Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -397,9 +474,9 @@ function Overview({ monitors, selectedId, samples, runningId, sampleDetail, onSe
   return <div className="grid gap-5 xl:grid-cols-[minmax(30rem,1fr)_22rem]">
     <div className="overflow-hidden rounded-md border border-dock-border">
       <table className="w-full text-left text-xs"><thead className="bg-dock-surface text-[10px] uppercase text-dock-text-muted"><tr><th className="px-3 py-2">{t("monitoring.device")}</th><th>{t("monitoring.status")}</th><th>{t("monitoring.lastSample")}</th><th className="w-28" /></tr></thead>
-      <tbody>{monitors.map((monitor) => <tr key={monitor.id} onClick={() => onSelect(monitor.id)} className={`cursor-pointer border-t border-dock-border ${selectedId === monitor.id ? "bg-dock-accent/5" : "hover:bg-dock-surface"}`}><td className="px-3 py-2.5"><div className="font-medium text-dock-text">{monitor.displayName}</div><div className="text-[10px] text-dock-text-muted">{monitor.sessionName} · {monitor.host} · <span className="font-mono" dir="ltr">{monitor.interfaceName ?? t("monitoring.legacyScope")}</span></div></td><td><Status value={monitor.latestStatus ?? "unknown"} /></td><td className="text-dock-text-muted">{formatTime(monitor.latestObservedAt)}</td><td><div className="flex justify-end gap-1 pr-2"><button className="icon-button" title={monitor.interfaceName ? (monitor.enabled ? t("monitoring.pause") : t("monitoring.enable")) : t("monitoring.legacyScopeHelp")} disabled={!monitor.interfaceName} onClick={(event) => { event.stopPropagation(); void onToggle(monitor); }}>{monitor.enabled ? <Pause size={13} /> : <Play size={13} />}</button><button className="icon-button" title={t("monitoring.runNow")} disabled={runningId === monitor.id || !monitor.enabled || !monitor.interfaceName} onClick={(event) => { event.stopPropagation(); void onRun(monitor.id); }}><RefreshCw size={13} className={runningId === monitor.id ? "animate-spin" : ""} /></button><button className="icon-button text-red-400" title={t("common.delete")} onClick={(event) => { event.stopPropagation(); void onDelete(monitor); }}><Trash2 size={13} /></button></div></td></tr>)}</tbody></table>
+      <tbody>{monitors.map((monitor) => <tr key={monitor.id} onClick={() => onSelect(monitor.id)} className={`cursor-pointer border-t border-dock-border ${selectedId === monitor.id ? "bg-dock-accent/5" : "hover:bg-dock-surface"}`}><td className="px-3 py-2.5"><div className="font-medium text-dock-text">{monitor.displayName}</div><div className="text-[10px] text-dock-text-muted">{monitor.sessionName} · {monitor.host} · <span className="font-mono" dir="ltr">{monitor.interfaceName ?? t("monitoring.legacyScope")}</span></div></td><td><Status value={monitor.latestStatus ?? "unknown"} /></td><td className="text-dock-text-muted"><div>{formatTime(monitor.latestObservedAt)}</div><select aria-label={t("monitoring.intervalFor", { name: monitor.displayName })} value={monitor.intervalSeconds} onClick={(event) => event.stopPropagation()} onChange={(event) => { event.stopPropagation(); void onIntervalChange(monitor, Number(event.target.value)); }} className="mt-1 h-6 rounded border border-dock-border bg-dock-bg px-1 text-[9px]"><option value={30}>30 sec</option><option value={60}>1 min</option><option value={300}>5 min</option><option value={900}>15 min</option><option value={3600}>1 hour</option></select></td><td><div className="flex justify-end gap-1 pr-2"><button className="icon-button" title={monitor.interfaceName ? (monitor.enabled ? t("monitoring.pause") : t("monitoring.enable")) : t("monitoring.legacyScopeHelp")} disabled={!monitor.interfaceName} onClick={(event) => { event.stopPropagation(); void onToggle(monitor); }}>{monitor.enabled ? <Pause size={13} /> : <Play size={13} />}</button><button className="icon-button" title={t("monitoring.runNow")} disabled={runningId === monitor.id || !monitor.enabled || !monitor.interfaceName} onClick={(event) => { event.stopPropagation(); void onRun(monitor.id); }}><RefreshCw size={13} className={runningId === monitor.id ? "animate-spin" : ""} /></button><button className="icon-button text-red-400" title={t("common.delete")} onClick={(event) => { event.stopPropagation(); void onDelete(monitor); }}><Trash2 size={13} /></button></div></td></tr>)}</tbody></table>
     </div>
-    <div><h2 className="mb-3 text-xs font-medium text-dock-text">{t("monitoring.recentHealth")}</h2><History samples={samples} onSelect={onSelectSample} />{sampleDetail && <details open className="mt-4 border-t border-dock-border pt-3"><summary className="cursor-pointer text-[11px] font-medium text-dock-text">{t("monitoring.sampleDetails")}</summary><pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-dock-bg p-2 text-[10px] text-dock-text-secondary" dir="ltr">{sampleDetail.rawOutput ?? sampleDetail.sample.error ?? t("monitoring.noRawOutput")}</pre></details>}</div>
+    <div><h2 className="mb-3 text-xs font-medium text-dock-text">{t("monitoring.recentHealth")}</h2><History samples={samples} onSelect={onSelectSample} />{sampleDetail && <SampleOutput output={sampleDetail.rawOutput ?? sampleDetail.sample.error ?? t("monitoring.noRawOutput")} />}</div>
   </div>;
 }
 
@@ -409,10 +486,24 @@ function History({ samples, onSelect }: { samples: MonitorSample[]; onSelect: (s
   return <div className="space-y-1">{samples.slice(0, 16).map((sample) => <button type="button" key={sample.id} title={t("monitoring.viewSample")} onClick={() => void onSelect(sample.id)} className="grid w-full grid-cols-[5rem_1fr_auto] items-center gap-2 py-1.5 text-start hover:bg-dock-surface"><span className="text-[10px] text-dock-text-muted">{formatTime(sample.observedAt)}</span><div><div className="h-1.5 overflow-hidden rounded-sm bg-dock-border"><div className={`h-full ${statusBar(sample.status)}`} style={{ width: `${Math.max(8, 100 - (sample.summary.downCount ?? 0) * 10)}%` }} /></div><div className="mt-1 text-[9px] text-dock-text-muted">{sample.summary.errorCount ?? 0} {t("monitoring.errors")} · {sample.summary.logCount ?? 0} {t("monitoring.logs")}</div></div><Status value={sample.status} /></button>)}</div>;
 }
 
-function Incidents({ incidents, monitorNames, onAcknowledge }: { incidents: MonitorIncident[]; monitorNames: Map<string, string>; onAcknowledge: (id: string) => Promise<void> }) {
+function Incidents({ incidents, monitorNames, onAcknowledge, onUnacknowledge }: { incidents: MonitorIncident[]; monitorNames: Map<string, string>; onAcknowledge: (id: string) => Promise<void>; onUnacknowledge: (id: string) => Promise<void> }) {
   const { t } = useTranslation();
   if (incidents.length === 0) return <Empty icon={ShieldCheck} text={t("monitoring.noIncidents")} />;
-  return <div className="divide-y divide-dock-border border-y border-dock-border">{incidents.map((incident) => <div key={incident.id} className="grid gap-2 py-3 sm:grid-cols-[1fr_auto] sm:items-center"><div><div className="flex items-center gap-2"><BellRing size={13} className={incident.state === "resolved" ? "text-dock-text-muted" : "text-red-400"} /><span className="text-xs font-medium text-dock-text">{incident.title}</span><Status value={incident.state} /></div><div className="mt-1 text-[11px] text-dock-text-muted">{monitorNames.get(incident.monitorId)} · {incident.details} · {t("monitoring.occurrences", { count: incident.occurrenceCount })}</div></div>{incident.state === "open" && <button onClick={() => void onAcknowledge(incident.id)} className="flex items-center gap-1 rounded-md border border-dock-border px-2.5 py-1.5 text-[11px] text-dock-text-secondary hover:bg-dock-surface"><Check size={12} />{t("monitoring.acknowledge")}</button>}</div>)}</div>;
+  return <div className="divide-y divide-dock-border border-y border-dock-border">{incidents.map((incident) => <div key={incident.id} className="grid gap-2 py-3 sm:grid-cols-[1fr_auto] sm:items-center"><div><div className="flex items-center gap-2"><BellRing size={13} className={incident.state === "resolved" ? "text-dock-text-muted" : "text-red-400"} /><span className="text-xs font-medium text-dock-text">{incident.title}</span><Status value={incident.state} /></div><div className="mt-1 text-[11px] text-dock-text-muted">{monitorNames.get(incident.monitorId)} · {incident.details} · {t("monitoring.occurrences", { count: incident.occurrenceCount })}</div></div>{incident.state === "open" ? <button onClick={() => void onAcknowledge(incident.id)} className="flex items-center gap-1 rounded-md border border-dock-border px-2.5 py-1.5 text-[11px] text-dock-text-secondary hover:bg-dock-surface"><Check size={12} />{t("monitoring.acknowledge")}</button> : incident.state === "acknowledged" ? <button onClick={() => void onUnacknowledge(incident.id)} className="flex items-center gap-1 rounded-md border border-dock-border px-2.5 py-1.5 text-[11px] text-dock-text-secondary hover:bg-dock-surface"><Undo2 size={12} />{t("monitoring.unacknowledge")}</button> : null}</div>)}</div>;
+}
+
+function SampleOutput({ output }: { output: string }) {
+  const { t } = useTranslation();
+  const addToast = useToastStore((state) => state.addToast);
+  const copy = async () => {
+    try {
+      await writeText(output);
+      addToast("success", t("monitoring.outputCopied"));
+    } catch (error) {
+      addToast("error", t("monitoring.outputCopyFailed", { error: String(error) }));
+    }
+  };
+  return <details open className="mt-4 border-t border-dock-border pt-3"><summary className="cursor-pointer text-[11px] font-medium text-dock-text">{t("monitoring.sampleDetails")}</summary><div className="flex justify-end"><button type="button" onClick={() => void copy()} title={t("monitoring.copyOutput")} className="inline-flex h-6 items-center gap-1 rounded px-1.5 text-[9px] text-dock-text-muted hover:bg-dock-surface-hover hover:text-dock-text"><Copy size={11} />{t("monitoring.copyOutput")}</button></div><pre className="select-text max-h-64 overflow-auto whitespace-pre-wrap break-words rounded bg-dock-bg p-2 font-mono text-[10px] text-dock-text-secondary" dir="ltr">{output}</pre></details>;
 }
 
 function Baselines({ monitor, monitors, baselines, comparison, onSelectMonitor, onCapture, onCompare, onDelete }: {
@@ -436,3 +527,10 @@ function Status({ value }: { value: string }) { const classes: Record<string, st
 function statusBar(status: MonitorSample["status"]) { return status === "healthy" ? "bg-emerald-400" : status === "warning" ? "bg-amber-400" : status === "unknown" ? "bg-dock-text-muted" : "bg-red-400"; }
 function formatTime(value?: string) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) : "—"; }
 function isActiveMaintenance(marker: MaintenanceMarker) { const now = Date.now(); return new Date(marker.startsAt).getTime() <= now && new Date(marker.endsAt).getTime() >= now; }
+function inferMonitorProvider(session?: ReturnType<typeof useSessionStore.getState>["sessions"][number]): NetworkMonitorProviderId | "" {
+  const vendor = session?.vendor?.trim().toLocaleLowerCase() ?? "";
+  const deviceType = session?.device_type?.trim().toLocaleLowerCase() ?? "";
+  if (vendor === "arista" || vendor === "arista networks") return "arista-eos";
+  if (deviceType.includes("ios-xe") || deviceType === "ios" || deviceType === "cisco ios") return "cisco-ios";
+  return "";
+}

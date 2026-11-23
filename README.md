@@ -6,16 +6,17 @@ A modern desktop application for managing SSH, Telnet, Serial, BMC, and VNC remo
 
 Built for network engineers, data-center technicians, system administrators, and IT professionals who manage hundreds or thousands of network devices.
 
-![Version](https://img.shields.io/badge/version-2.0.5-blue)
+![Version](https://img.shields.io/badge/version-2.0.6-blue)
 ![Platform](https://img.shields.io/badge/release-Windows%20x64-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
-## What's new in v2.0.0
+## Current release highlights
 
-- Persistent Arista EOS interface monitoring and a Network Health workspace now provide retained samples, incidents, baselines, comparisons, and maintenance windows.
-- Integrated noVNC sessions run through a tokenized loopback bridge, with RealVNC Viewer retained as an external fallback.
-- Native monitor alerts apply persistent occurrence deduplication, cooldowns, and maintenance suppression.
-- This release is available for Windows x64. macOS ARM64 remains deferred pending signing, notarization, and device validation.
+- Persistent Arista EOS and Cisco IOS/IOS-XE interface monitoring provides retained samples, reversible incident acknowledgement, baselines, comparisons, maintenance windows, and native alerts.
+- Integrated noVNC sessions include encrypted RealVNC RA2 and RA2_256 support through a pinned MPL-2.0 fork, with explicit server-key approval and an external RealVNC Viewer fallback.
+- Saved VNC credential profiles resolve secrets from the operating-system keyring only when connecting; manual credentials remain available.
+- Signed updater manifests use public release-download URLs and retain current and previous Windows installers.
+- Windows x64 is the published binary platform. CI compiles and tests on Windows and macOS 15; macOS ARM64 distribution remains deferred pending Apple signing, notarization, and device validation.
 
 > **v1.0.1 credential repair:** passwords created with v1.0.1 were not persisted and cannot be recovered. After updating, edit each affected credential profile and save its password once.
 
@@ -54,8 +55,8 @@ Built for network engineers, data-center technicians, system administrators, and
 - **Device Info and Quick Commands** - Match configured session metadata to conservative Generic SSH, Linux, or Arista EOS providers and expose exact read-only commands for insertion without automatic probing or execution.
 - **Structured device diagnostics** - Run provider-specific allowlisted checks in isolated SSH channels with status, exit code, truncation state, and raw stdout/stderr shown beside the terminal.
 - **Diagnostics workspace** - Explicitly choose a connected SSH target, monitor allowlisted checks across panes, select or copy raw output, cancel or rerun work, and retain bounded local history until it is explicitly cleared.
-- **Arista interface monitoring** - Run the fixed read-only EOS `show interfaces | json` check on a schedule for explicitly configured, trusted SSH sessions and retain bounded samples and incidents in SQLite.
-- **Network Health workspace** - Review monitor rollups, sample history, incident acknowledgement, copied baselines, baseline comparisons, and maintenance windows from one backend-owned data model.
+- **Vendor-aware interface monitoring** - Run provider-owned, read-only checks for one explicit interface on Arista EOS or Cisco IOS/IOS-XE through trusted saved SSH sessions.
+- **Network Health workspace** - Review automatically refreshed monitor rollups and samples, copy retained raw output, acknowledge or unacknowledge incidents, adjust intervals, capture baselines, compare snapshots, and schedule maintenance windows.
 - **Native monitor alerts** - Notify on new unresolved monitor occurrences with persistent deduplication, a one-hour cooldown, and maintenance-window suppression.
 - **MultiExec** - Review one exact command against explicitly selected connected SSH panes, confirm modifying or high-risk batches, and inspect status plus raw output independently for every target.
 - **Semantic output colors** - Optionally highlights IP/CIDR addresses, MAC addresses, interfaces, VLANs, timestamps, status words, and ping results without changing the remote byte stream or overriding native ANSI colors.
@@ -121,12 +122,14 @@ Diagnostics use backend allowlisted commands; this workspace does not accept arb
 
 ### Network Health
 
-1. Open **Network Health** and select an eligible saved Arista EOS SSH session.
-2. Create an interface monitor and choose its polling interval. Monitoring always uses the provider-owned read-only command; arbitrary command text is not stored or executed.
-3. Review health rollups, samples, and incidents. Acknowledge incidents, copy a successful sample as a baseline, or compare later samples with that baseline.
+1. Open **Network Health**, select a saved SSH session, and explicitly choose **Arista EOS** or **Cisco IOS / IOS-XE**.
+2. Enter one interface and choose a 30-second-to-1-hour polling interval. Monitoring always uses provider-owned read-only commands; arbitrary command text is neither stored nor executed.
+3. Review automatically refreshed health rollups, samples, matching logs, and incidents. Copy retained output, acknowledge or unacknowledge incidents, copy a successful sample as a baseline, or compare later samples with that baseline.
 4. Add a maintenance window to suppress native notifications globally or for one session during planned work.
 
-The monitor worker starts with SessionDock and uses an exclusive lock so only one worker operates on the local database. It can continue after the main window exits, and the updater requests a graceful worker shutdown before installation. The worker is not currently registered to start at OS login. Update/uninstall behavior, packaged native notification delivery, and macOS behavior still require platform validation; do not rely on monitoring across a reboot until those gates are complete.
+Arista EOS uses `show interfaces <INTERFACE> | json` and `show logging | grep <INTERFACE>`. Cisco IOS/IOS-XE uses conventional `show interfaces <INTERFACE>` text and `show logging | include <INTERFACE>`. Sanitized parser fixtures cover both providers; this release was not validated against physical Cisco hardware. Cisco NX-OS, Juniper Junos, and other platforms are not yet supported and are not treated as generic Cisco IOS devices.
+
+The detached monitor worker starts with SessionDock, checks due work every second, runs up to four different saved sessions concurrently, and prevents scheduled/manual overlap for the same session. A failed collection is retained as a failed sample without deleting prior history. The worker can continue after the main window exits, but it is not registered to start at OS login; monitoring therefore does not continue across a reboot until SessionDock is started again.
 
 ## Security
 
@@ -156,7 +159,7 @@ The monitor worker starts with SessionDock and uses an exclusive lock so only on
 - VNC protocol diagnostics retain only bounded handshake metadata; credentials, authentication payloads, and framebuffer traffic are never logged or persisted
 - Embedded VNC never skips advertised encrypted RealVNC RA2 modes in favor of unencrypted RA2ne
 - The main WebView applies a restrictive Content Security Policy that permits Tauri IPC/assets and explicitly scoped loopback development and VNC connections
-- Monitor definitions contain provider and monitor identifiers rather than executable commands; collected data is bounded provider JSON and derived interface state, never credential material
+- Monitor definitions contain provider and monitor identifiers rather than executable commands; provider output is bounded before local parsing and never contains credential material by design
 
 ### BMC limitations
 
@@ -166,13 +169,12 @@ The monitor worker starts with SessionDock and uses an exclusive lock so only on
 
 ### VNC security compatibility
 
-The embedded viewer uses noVNC 1.7.0. The Rust bridge transports RFB bytes unchanged and cannot add encryption to a security mechanism that the viewer does not implement.
+The embedded viewer uses a pinned MPL-2.0 noVNC 1.7.0 fork. The Rust bridge transports RFB bytes unchanged; encryption is implemented and authenticated by the viewer protocol engine.
 
-- Standard RFB, VNC Authentication, Tight, XVP, Apple Remote Desktop, and MSLogonII are handled according to noVNC's capabilities. Some of these mechanisms do not provide full-session encryption.
-- noVNC supports RealVNC RA2ne type 6 for RSA/AES-protected authentication, with explicit server-key approval in SessionDock. RA2ne does not encrypt the subsequent desktop session and is not accepted as a substitute when the server advertises encrypted RA2.
-- RealVNC RA2 type 5, RA2_256 type 13, RA2ne_256 type 14, and VeNCrypt TLS/X.509 subtypes are not implemented by noVNC 1.7.0.
-- RealVNC Server with `Authentication=SystemAuth` and `Encryption=AlwaysOn` requires a compatible encrypted RealVNC security type. SessionDock reports that incompatibility and offers the installed RealVNC Viewer; it never disables encryption or changes server settings.
-- Interoperability with an authorized RealVNC `SystemAuth + AlwaysOn` test server remains a pending acceptance test. The embedded viewer must not be described as compatible until an engine with verified RA2 or RA2_256 support is integrated and tested.
+- RealVNC RA2 type 5 uses AES-128 and RA2_256 type 129 uses AES-256 with authenticated AES-EAX records for the full desktop session.
+- SessionDock prefers RA2_256, requires explicit SHA-256 server-key approval, and rejects malformed records, authentication-tag failures, counter discontinuities, and encrypted-to-RA2ne downgrades.
+- Embedded `SystemAuth + Encryption=AlwaysOn` interoperability passed against an authorized RealVNC test endpoint. Unknown proprietary security types remain unlabeled rather than guessed.
+- VeNCrypt TLS/X.509 and other mechanisms outside the pinned viewer engine remain unsupported; the external RealVNC Viewer fallback does not change server settings or disable encryption.
 
 ## Tech Stack
 
@@ -197,7 +199,7 @@ The embedded viewer uses noVNC 1.7.0. The Rust bridge transports RFB bytes uncha
 
 ### Windows
 
-Download `SessionDock_2.0.5_x64-setup.exe` from the [v2.0.5 GitHub release](https://github.com/nshitritIntel/SessionDock/releases/tag/v2.0.5) and run it. The NSIS installer will:
+Download the Windows x64 NSIS installer from the [latest published GitHub release](https://github.com/nshitritIntel/SessionDock/releases/latest) and run it. The installer will:
 
 - Install to Program Files
 - Create a Start Menu shortcut
@@ -238,7 +240,7 @@ npm run dev
 
 # Or manually:
 npx tauri build
-# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.5_x64-setup.exe
+# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.6_x64-setup.exe
 ```
 
 > **Intel network users:** The build script automatically sets the proxy (`proxy-iil.intel.com:912`). If you're on a different network, remove the proxy lines from `build.ps1`.

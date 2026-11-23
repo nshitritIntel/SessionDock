@@ -91,6 +91,14 @@ pub(crate) struct StandaloneSshConnection {
     _jump_bridges: Vec<JumpBridge>,
 }
 
+impl Drop for StandaloneSshConnection {
+    fn drop(&mut self) {
+        let _ = self
+            .session
+            .disconnect(None, "SessionDock monitor complete", None);
+    }
+}
+
 impl Drop for JumpBridge {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::Release);
