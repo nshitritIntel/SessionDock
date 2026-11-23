@@ -10,7 +10,6 @@
     "clipboard-manager:allow-write-text",
     "shell:allow-open",
     "updater:default",
-    "process:allow-restart",
     "dialog:default",
     "fs:default"
   ]

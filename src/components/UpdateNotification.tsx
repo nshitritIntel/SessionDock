@@ -3,13 +3,13 @@ import { check, type Update } from "@tauri-apps/plugin-updater";
 import { Download, X, RefreshCw, AlertTriangle } from "lucide-react";
 import { useAppStore } from "../stores/appStore";
 import { useAppVersion } from "../hooks/useAppVersion";
-import { installUpdate } from "../utils/installUpdate";
+import { installUpdate, type UpdateInstallPhase } from "../utils/installUpdate";
 
 export function UpdateNotification() {
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [updateVersion, setUpdateVersion] = useState("");
   const [updateNotes, setUpdateNotes] = useState("");
-  const [downloading, setDownloading] = useState(false);
+  const [installPhase, setInstallPhase] = useState<UpdateInstallPhase | null>(null);
   const [progress, setProgress] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -24,6 +24,7 @@ export function UpdateNotification() {
     try {
       const update = await check();
       if (update) {
+        await updateRef.current?.close().catch(() => undefined);
         updateRef.current = update;
         setUpdateAvailable(true);
         setUpdateVersion(update.version);
@@ -59,33 +60,37 @@ export function UpdateNotification() {
 
   const performUpdate = async () => {
     setShowSessionWarning(false);
-    setDownloading(true);
+    setInstallPhase("downloading");
     setError(null);
     setProgress(0);
     try {
       const update = updateRef.current ?? await check();
       if (!update) {
         setUpdateAvailable(false);
-        setDownloading(false);
+        setInstallPhase(null);
         return;
       }
 
       let downloadedBytes = 0;
       let totalBytes = 0;
 
-      await installUpdate(update, (event) => {
-        if (event.event === "Started") {
-          totalBytes = event.data.contentLength ?? 0;
-        } else if (event.event === "Progress") {
-          downloadedBytes += event.data.chunkLength;
-          if (totalBytes > 0) setProgress(Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)));
-        } else if (event.event === "Finished") {
-          setProgress(100);
-        }
-      });
+      await installUpdate(
+        update,
+        (event) => {
+          if (event.event === "Started") {
+            totalBytes = event.data.contentLength ?? 0;
+          } else if (event.event === "Progress") {
+            downloadedBytes += event.data.chunkLength;
+            if (totalBytes > 0) setProgress(Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)));
+          } else if (event.event === "Finished") {
+            setProgress(100);
+          }
+        },
+        setInstallPhase,
+      );
     } catch (e) {
       setError(String(e));
-      setDownloading(false);
+      setInstallPhase(null);
     }
   };
 
@@ -122,15 +127,27 @@ export function UpdateNotification() {
 
           {error && <p className="text-[11px] text-red-400">{error}</p>}
 
-          {downloading ? (
+          {installPhase ? (
             <div className="space-y-1">
               <div className="flex items-center justify-between text-[10px] text-dock-text-muted">
-                <span>Downloading...</span>
-                <span>{progress}%</span>
+                <span>
+                  {installPhase === "downloading"
+                    ? "Downloading update..."
+                    : installPhase === "stopping-monitoring"
+                      ? "Stopping background monitoring..."
+                      : "Installing and restarting..."}
+                </span>
+                {installPhase === "downloading" && <span>{progress}%</span>}
               </div>
-              <div className="w-full h-1.5 bg-dock-border rounded-full overflow-hidden">
-                <div className="h-full bg-dock-accent rounded-full transition-all" style={{ width: `${progress}%` }} />
-              </div>
+              {installPhase === "downloading" ? (
+                <div className="w-full h-1.5 bg-dock-border rounded-full overflow-hidden">
+                  <div className="h-full bg-dock-accent rounded-full transition-all" style={{ width: `${progress}%` }} />
+                </div>
+              ) : (
+                <div className="w-full h-1.5 bg-dock-border rounded-full overflow-hidden">
+                  <div className="h-full w-1/3 bg-dock-accent rounded-full animate-pulse" />
+                </div>
+              )}
             </div>
           ) : (
             <div className="flex gap-2">
