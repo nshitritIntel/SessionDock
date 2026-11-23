@@ -6,7 +6,7 @@ A modern desktop application for managing SSH, Telnet, Serial, BMC, and VNC remo
 
 Built for network engineers, data-center technicians, system administrators, and IT professionals who manage hundreds or thousands of network devices.
 
-![Version](https://img.shields.io/badge/version-2.0.8-blue)
+![Version](https://img.shields.io/badge/version-2.0.9-blue)
 ![Platform](https://img.shields.io/badge/release-Windows%20x64-lightgrey)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -240,7 +240,7 @@ npm run dev
 
 # Or manually:
 npx tauri build
-# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.8_x64-setup.exe
+# Output: src-tauri\target\release\bundle\nsis\SessionDock_2.0.9_x64-setup.exe
 ```
 
 > **Intel network users:** The build script automatically sets the proxy (`proxy-iil.intel.com:912`). If you're on a different network, remove the proxy lines from `build.ps1`.
@@ -347,10 +347,11 @@ SessionDock includes a built-in update system:
 Get-Content src-tauri\.tauri-private-key -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY
 Get-Content src-tauri\.tauri-key-password -Raw | gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD
 
-# For each release, bump the version in package.json, src-tauri/tauri.conf.json,
-# and src-tauri/Cargo.toml, then push a matching version tag.
-git tag v0.8.0
-git push origin v0.8.0
+# For each release, synchronize and validate every version declaration,
+# commit the result, then push a matching version tag.
+.\scripts\bump-version.ps1 -Version 2.0.9
+git tag v2.0.9
+git push origin v2.0.9
 ```
 
 The release workflow creates a draft, requires the Windows x64 quality and build gates to pass, uploads signed updater artifacts, and only then publishes the release. Installed copies check shortly after launch, whenever the app becomes active, and every six hours. The updater downloads, verifies, installs, and restarts SessionDock in place.

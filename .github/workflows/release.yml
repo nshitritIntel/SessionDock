@@ -72,6 +72,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Validate release versions
+        shell: pwsh
+        run: ./scripts/validate-version.ps1
+
       - name: TypeScript check
         run: npx tsc --noEmit
 
